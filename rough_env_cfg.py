@@ -193,7 +193,7 @@ class UnitreeGo2RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
         self.actions.joint_pos.scale = 0.25 # Go2 Standard
 
         # 2. ADD SENSORS TO SCENE
-        self.scene.height_scanner = None # Remove the old height scanner from parent
+        # self.scene.height_scanner = None # RE-ENABLED for Milestone 2.5 (Rough Terrain)
         # Lidar (RayCaster)
         # Target: 360 degrees, 64 rays -> Res = 5.625 deg
         self.scene.lidar = RayCasterCfg(
@@ -231,7 +231,7 @@ class UnitreeGo2RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
 
         # 4. REWARD TUNING (Go2 Specifics)
         self.rewards.feet_air_time.params["sensor_cfg"].body_names = ".*_foot"
-        self.rewards.feet_air_time.weight = 0.5 # Increased for stability
+        self.rewards.feet_air_time.weight = 0.3 # Increased for stability
         # self.rewards.feet_air_time.params["command_name"] = "goal_pos" # MILESTONE 4: UNCOMMENT THIS LINE
         self.rewards.dof_torques_l2.weight = -0.0002
         self.rewards.track_lin_vel_xy_exp.weight = 1.5
@@ -243,12 +243,12 @@ class UnitreeGo2RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
 
         # 5. DOMAIN RANDOMIZATION (if we want it)
         # We will need this for Sim-to-Real
-        # self.events.randomize_mass = mdp.EventTermCfg(
-        #     func=mdp.randomize_rigid_body_mass,
-        #     mode="startup",
-        #     params={
-        #         "asset_cfg": SceneEntityCfg("robot", body_names="base"),
-        #         "mass_distribution_params": (-1.0, 1.0), # +/- 1kg
-        #         "operation": "add",
-        #     },
-        # )
+        self.events.randomize_mass = mdp.EventTermCfg(
+            func=mdp.randomize_rigid_body_mass,
+            mode="startup",
+            params={
+                "asset_cfg": SceneEntityCfg("robot", body_names="base"),
+                "mass_distribution_params": (-1.0, 1.0), # +/- 1kg
+                "operation": "add",
+            },
+        )
