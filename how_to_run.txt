@@ -1,0 +1,46 @@
+---- Milestone 1: Standing ----
+
+Train
+```
+./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/train.py --task=Isaac-Nav-Go2-v0 --headless
+```
+
+Watch
+```
+./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/play.py --task=Isaac-Nav-Go2-v0 --video --video_length 200
+```
+(Rename and save the video to the Google Drive)
+
+
+---- Milestone 2: Drunk walking ----
+
+In class NavCommandsCfg, change this part as specified for Milestone 2:
+"mdp.UniformVelocityCommandCfg.Ranges"
+
+Train, watch, record, and save the video.
+
+
+---- Milestone 2.5: Drunk walking on terrain ----
+
+In __post_init__(), comment out the TERRAIN SETUP section as specified
+
+Train, watch, record, and save the video.
+
+
+---- Milestone 3: Full walking control ----
+
+In class NavCommandsCfg, change this part as specified for Milestone 3:
+"mdp.UniformVelocityCommandCfg.Ranges"
+
+Train, watch, record, and save the video.
+
+
+---- Milestone 4: Goal chasing ----
+
+In class NavCommandsCfg, uncomment the specified block at the bottom
+In class NavCommandsCfg, comment out the previous block (base_velocity = ...)
+Under PolicyCfg, swap the goal_relative goal to the commented one
+Under NavRewardsCfg, uncomment the progress to goal and arrival bonus rewards
+At the bottom of post_init(), uncomment this line: "self.rewards.feet_air_time.params["command_name"] = "goal_pos""
+
+Train, watch, record, and save the video.

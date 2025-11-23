@@ -1,85 +1,210 @@
-# Copyright (c) 2022-2025, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
-# All rights reserved.
-#
-# SPDX-License-Identifier: BSD-3-Clause
+# go2_nav/rough_env_cfg.py
 
 from isaaclab.utils import configclass
+import isaaclab.envs.mdp as mdp
+from isaaclab.managers import SceneEntityCfg
+from isaaclab.sensors import RayCasterCfg, patterns, ContactSensorCfg
+from isaaclab.terrains import TerrainImporterCfg
+import isaaclab.sim as sim_utils
 
+# Import Parent Configs
 from isaaclab_tasks.manager_based.locomotion.velocity.velocity_env_cfg import LocomotionVelocityRoughEnvCfg
 
-##
-# Pre-defined configs
-##
-from isaaclab_assets.robots.unitree import UNITREE_GO2_CFG  # isort: skip
+# Import the Robot Asset
+from isaaclab_assets.robots.unitree import UNITREE_GO2_CFG
 
+# IMPORT YOUR CUSTOM MODULES
+from . import custom_obs, custom_rewards, commands
+
+##
+# Custom Configuration Classes
+# We define these here to override the defaults
+##
+
+@configclass
+class NavObservationsCfg(LocomotionVelocityRoughEnvCfg.ObservationsCfg):
+    """We extend the parent observations to add our new sensors."""
+    
+    @configclass
+    class PolicyCfg(LocomotionVelocityRoughEnvCfg.ObservationsCfg.PolicyCfg):
+        # 1. Add Contact Forces (Feeling the ground)
+        contact_forces = mdp.ObservationTermCfg(
+            func=mdp.contact_sensor_data,
+            params={
+                "sensor_cfg": SceneEntityCfg("contact_forces"), 
+                "data_type": "force"
+            },
+            clip=(-100.0, 100.0),
+            scale=0.01,
+        )
+
+        # 2. Add Relative Goal (Placeholder for now)
+        goal_relative = mdp.ObservationTermCfg(
+            func=custom_obs.goal_relative_placeholder,
+            params={"asset_cfg": SceneEntityCfg("robot")}
+        )
+
+        # MILESTONE 4: (SWAP ABOVE WITH THIS ONE)
+        # goal_relative = mdp.ObservationTermCfg(
+        #     func=custom_obs.goal_relative_target, # <--- USE REAL TARGET FUNC
+        #     params={"asset_cfg": SceneEntityCfg("robot")}
+        # )
+
+        # 3. Add Lidar (Placeholder for now)
+        lidar = mdp.ObservationTermCfg(
+            func=custom_obs.placeholder_lidar
+        )
+
+        # 4. Add Lookahead (Placeholder for now)
+        lookahead = mdp.ObservationTermCfg(
+            func=custom_obs.lookahead_hint
+        )
+
+    # Assign the updated policy group
+    policy: PolicyCfg = PolicyCfg()
+
+
+@configclass
+class NavRewardsCfg(LocomotionVelocityRoughEnvCfg.RewardsCfg):
+    """We add our custom rewards here."""
+    
+    # Add Anti-Drift (Penalize sideways movement)
+    lin_vel_y_penalty = mdp.RewardTermCfg(
+        func=custom_rewards.lin_vel_y_l2, 
+        weight=-2.0, 
+        params={"asset_cfg": SceneEntityCfg("robot")}
+    )
+
+    # MILESTONE 4: Add Progress to Goal Rewards
+    # progress_to_goal = mdp.RewardTermCfg(
+    #     func=custom_rewards.progress_to_goal,
+    #     weight=1.0,
+    #     params={
+    #         "command_name": "goal_pos", # MUST MATCH COMMAND NAME
+    #         "asset_cfg": SceneEntityCfg("robot")
+    #     }
+    # )
+    # arrival_bonus = mdp.RewardTermCfg(
+    #     func=custom_rewards.arrival_reward,
+    #     weight=100.0,
+    #     params={
+    #         "command_name": "goal_pos",
+    #         "threshold": 0.5,
+    #         "asset_cfg": SceneEntityCfg("robot")
+    #     }
+    # )
+
+
+@configclass
+class NavCommandsCfg(LocomotionVelocityRoughEnvCfg.CommandsCfg):
+    """Define our commands."""
+    
+    # 1. Velocity Command (Active for Milestones 1-3)
+    base_velocity = mdp.UniformVelocityCommandCfg(
+        asset_name="robot",
+        resampling_time_range=(10.0, 10.0),
+        rel_standing_envs=0.02,
+        rel_heading_envs=1.0,
+        heading_command=True,
+        heading_control_stiffness=0.5,
+        debug_vis=True,
+        # MILESTONE 1 SETTINGS: FROZEN (0.0)
+        ranges=mdp.UniformVelocityCommandCfg.Ranges(
+            lin_vel_x=(0.0, 0.0), 
+            lin_vel_y=(0.0, 0.0), 
+            ang_vel_z=(0.0, 0.0), 
+            heading=(0.0, 0.0)
+        ),
+    )
+
+    # MILESTONE 2: (REPLACE WITH THIS) 
+    # ranges=mdp.UniformVelocityCommandCfg.Ranges(
+    #         lin_vel_x=(0.0, 1.0), # CHANGED: Move forward up to 1 m/s
+    #         lin_vel_y=(0.0, 0.0), 
+    #         ang_vel_z=(0.0, 0.0), 
+    #         heading=(0.0, 0.0)
+    #     ),
+
+    # MILESTONE 3: (REPLACE WITH THIS)
+    # ranges=mdp.UniformVelocityCommandCfg.Ranges(
+    #         lin_vel_x=(-1.0, 1.0), # Forward/Back
+    #         lin_vel_y=(-0.5, 0.5), # Strafe Left/Right
+    #         ang_vel_z=(-1.0, 1.0), # Turn Left/Right
+    #         heading=(-3.14, 3.14)  # Face any direction
+    #     ),
+
+
+    # MILESTONE 4: Goal Command
+    # UNCOMMENT THIS BLOCK AFTER MILESTONE 3
+    # COMMENT OUT THE PREVIOUS BLOCK (base_velocity = ...)
+    # goal_pos = commands.GoalCommandCfg(
+    #     resampling_time_range=(4.0, 8.0),
+    #     debug_vis=True
+    # )
+
+
+##
+# The Main Environment Class
+##
 
 @configclass
 class UnitreeGo2RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
+    
+    # Override with our custom configs
+    observations: NavObservationsCfg = NavObservationsCfg()
+    rewards: NavRewardsCfg = NavRewardsCfg()
+    commands: NavCommandsCfg = NavCommandsCfg()
+
     def __post_init__(self):
-        # post init of parent
         super().__post_init__()
 
+        # 1. ROBOT SETUP
         self.scene.robot = UNITREE_GO2_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
-        self.scene.height_scanner.prim_path = "{ENV_REGEX_NS}/Robot/base"
-        # scale down the terrains because the robot is small
-        self.scene.terrain.terrain_generator.sub_terrains["boxes"].grid_height_range = (0.025, 0.1)
-        self.scene.terrain.terrain_generator.sub_terrains["random_rough"].noise_range = (0.01, 0.06)
-        self.scene.terrain.terrain_generator.sub_terrains["random_rough"].noise_step = 0.01
+        self.actions.joint_pos.scale = 0.25 # Go2 Standard
 
-        # reduce action scale
-        self.actions.joint_pos.scale = 0.25
+        # 2. ADD SENSORS TO SCENE
+        # Lidar (RayCaster)
+        self.scene.height_scanner = None # Remove the old height scanner from parent
+        self.scene.lidar = RayCasterCfg(
+            prim_path="{ENV_REGEX_NS}/Robot/base",
+            offset=RayCasterCfg.OffsetCfg(pos=(0.25, 0.0, 0.1)), # Chin mount
+            attach_yaw_only=True,
+            pattern_cfg=patterns.LidarPatternCfg(
+                channels=1,
+                horizontal_fov_range=(-2.0, 2.0),
+                horizontal_res=0.05,
+            ),
+        )
+        # Ensure contact forces are tracking air time
+        self.scene.contact_forces = ContactSensorCfg(
+            prim_path="{ENV_REGEX_NS}/Robot/.*_foot", 
+            history_length=3, 
+            track_air_time=True
+        )
 
-        # event
-        self.events.push_robot = None
-        self.events.add_base_mass.params["mass_distribution_params"] = (-1.0, 3.0)
-        self.events.add_base_mass.params["asset_cfg"].body_names = "base"
-        self.events.base_external_force_torque.params["asset_cfg"].body_names = "base"
-        self.events.reset_robot_joints.params["position_range"] = (1.0, 1.0)
-        self.events.reset_base.params = {
-            "pose_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5), "yaw": (-3.14, 3.14)},
-            "velocity_range": {
-                "x": (0.0, 0.0),
-                "y": (0.0, 0.0),
-                "z": (0.0, 0.0),
-                "roll": (0.0, 0.0),
-                "pitch": (0.0, 0.0),
-                "yaw": (0.0, 0.0),
-            },
-        }
-        self.events.base_com = None
+        # 3. TERRAIN SETUP (MILESTONE 1: FLAT)
+        # COMMENT THIS OUT AFTER MILESTONE 2
+        self.scene.terrain = TerrainImporterCfg(
+            prim_path="/World/ground",
+            terrain_type="plane", # FORCE FLAT GROUND
+            collision_group=-1,
+            physics_material=sim_utils.RigidBodyMaterialCfg(
+                friction_combine_mode="multiply",
+                restitution_combine_mode="multiply",
+                static_friction=1.0,
+                dynamic_friction=1.0,
+            ),
+        )
+        # COMMENT ABOVE OUT AFTER MILESTONE 2
 
-        # rewards
+        # 4. REWARD TUNING (Go2 Specifics)
         self.rewards.feet_air_time.params["sensor_cfg"].body_names = ".*_foot"
-        self.rewards.feet_air_time.weight = 0.01
-        self.rewards.undesired_contacts = None
+        self.rewards.feet_air_time.weight = 0.5 # Increased for stability
+        # self.rewards.feet_air_time.params["command_name"] = "goal_pos" # MILESTONE 4: UNCOMMENT THIS LINE
         self.rewards.dof_torques_l2.weight = -0.0002
         self.rewards.track_lin_vel_xy_exp.weight = 1.5
         self.rewards.track_ang_vel_z_exp.weight = 0.75
-        self.rewards.dof_acc_l2.weight = -2.5e-7
-
-        # terminations
-        self.terminations.base_contact.params["sensor_cfg"].body_names = "base"
-
-
-@configclass
-class UnitreeGo2RoughEnvCfg_PLAY(UnitreeGo2RoughEnvCfg):
-    def __post_init__(self):
-        # post init of parent
-        super().__post_init__()
-
-        # make a smaller scene for play
-        self.scene.num_envs = 50
-        self.scene.env_spacing = 2.5
-        # spawn the robot randomly in the grid (instead of their terrain levels)
-        self.scene.terrain.max_init_terrain_level = None
-        # reduce the number of terrains to save memory
-        if self.scene.terrain.terrain_generator is not None:
-            self.scene.terrain.terrain_generator.num_rows = 5
-            self.scene.terrain.terrain_generator.num_cols = 5
-            self.scene.terrain.terrain_generator.curriculum = False
-
-        # disable randomization for play
-        self.observations.policy.enable_corruption = False
-        # remove random pushing event
-        self.events.base_external_force_torque = None
-        self.events.push_robot = None
+        
+        # Remove rewards that might cause issues early on
+        self.rewards.undesired_contacts = None
+        self.events.push_robot = None # Disable pushing for Milestone 1
