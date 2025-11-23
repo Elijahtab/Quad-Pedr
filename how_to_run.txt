@@ -1,3 +1,9 @@
+
+How to toggle LiDAR ray visualization:
+In rough_env_cfg.py, look for the RayCasterCfg block (around line 200) and change this line: 
+``` debug_vis=False  # Set to True to show rays ```
+
+
 ---- Milestone 1: Standing ----
 
 Train

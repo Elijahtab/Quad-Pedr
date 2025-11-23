@@ -193,17 +193,19 @@ class UnitreeGo2RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
         self.actions.joint_pos.scale = 0.25 # Go2 Standard
 
         # 2. ADD SENSORS TO SCENE
-        # Lidar (RayCaster)
         self.scene.height_scanner = None # Remove the old height scanner from parent
+        # Lidar (RayCaster)
+        # Target: 360 degrees, 64 rays -> Res = 5.625 deg
         self.scene.lidar = RayCasterCfg(
             prim_path="{ENV_REGEX_NS}/Robot/base",
             offset=RayCasterCfg.OffsetCfg(pos=(0.25, 0.0, 0.1)), # Chin mount
             attach_yaw_only=True,
             pattern_cfg=patterns.LidarPatternCfg(
                 channels=1,
-                horizontal_fov_range=(-2.0, 2.0),
-                horizontal_res=0.05,
+                horizontal_fov_range=(-180.0, 180.0), # 360 deg
+                horizontal_res=1.0,                   # 1 deg resolution -> 360 rays
             ),
+            debug_vis=False, # Toggle this to True to show visualization
         )
         # Ensure contact forces are tracking air time
         self.scene.contact_forces = ContactSensorCfg(
@@ -238,3 +240,15 @@ class UnitreeGo2RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
         # Remove rewards that might cause issues early on
         self.rewards.undesired_contacts = None
         self.events.push_robot = None # Disable pushing for Milestone 1
+
+        # 5. DOMAIN RANDOMIZATION (if we want it)
+        # We will need this for Sim-to-Real
+        # self.events.randomize_mass = mdp.EventTermCfg(
+        #     func=mdp.randomize_rigid_body_mass,
+        #     mode="startup",
+        #     params={
+        #         "asset_cfg": SceneEntityCfg("robot", body_names="base"),
+        #         "mass_distribution_params": (-1.0, 1.0), # +/- 1kg
+        #         "operation": "add",
+        #     },
+        # )

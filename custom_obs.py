@@ -61,7 +61,7 @@ def placeholder_lidar(env: ManagerBasedRLEnv) -> torch.Tensor:
     Returns random noise to occupy the 64 inputs reserved for Lidar.
     Range: [0.0, 1.0] to mimic normalized distance.
     """
-    return torch.rand((env.num_envs, 64), device=env.device)
+    return torch.rand((env.num_envs, 360), device=env.device)
 
 def lidar_scan_normalized(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
     """Reads the RayCaster, clips distance, and normalizes 0-1."""
@@ -87,17 +87,83 @@ def lidar_scan_normalized(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) ->
     
     return normalized_scan
 
+
 def lookahead_hint(env: ManagerBasedRLEnv) -> torch.Tensor:
     """
-    Phase 1: Returns random noise (to keep neurons alive).
-    Phase 2: Returns vector to SLAM point.
+    Phase 1: Returns random noise with a RARE availability flag.
+    Strategy: 90% Off / 10% On.
+    Why: Prevents the network from learning to "hate" this input.
     """
-    # Generate random noise [num_envs, 3]
-    # We use env.device to make sure it's on GPU
-    noise = torch.rand((env.num_envs, 3), device=env.device) 
+    # 1. Random Vector (The Garbage)
+    noise_vec = torch.randn((env.num_envs, 3), device=env.device)
     
-    # Set the "Availability Flag" (3rd element) to 0 for now
-    noise[:, 2] = 0.0 
+    # 2. Bernoulli Mask (The Coin Flip)
+    # 0.1 means 10% chance of being 1.0, 90% chance of being 0.0
+    flag = torch.bernoulli(torch.full((env.num_envs, 1), 0.1, device=env.device))
     
-    return noise
+    # 3. Combine
+    return torch.cat([noise_vec, flag], dim=-1)
+
+
+def lookahead_hint2(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+    """
+    End of Phase 1 (maybe) (Smart Placeholder): 
+    Returns a 'Synthetic Hint' to pre-train the switching logic.
+    - 10% of the time: Returns the Real Goal Vector + Flag 1.0 (Teaches trust)
+    - 90% of the time: Returns Random Noise + Flag 0.0 (Teaches ignore)
+    """
+    # 1. Create the container
+    obs = torch.zeros((env.num_envs, 4), device=env.device) # [x, y, z, flag] (Wait, your lookahead is 3 dims right? Dist, Sin, Cos + Flag?)
+    
+    # Let's assume your lookahead obs is size 4: [Dist, Sin, Cos, Flag]
+    # If your defined size is 3, modify accordingly. 
+    # Based on our previous talk, let's assume standard vector [x, y, z] + flag? 
+    # Or [Dist, Angle, Flag]? Let's stick to the vector logic you likely used.
+    
+    # 2. Generate the "Noise" case (Standard)
+    noise_vec = torch.randn((env.num_envs, 3), device=env.device) # Random vector
+    noise_flag = torch.zeros((env.num_envs, 1), device=env.device) # Flag 0
+    
+    # 3. Generate the "Real Goal" case (The Synthetic Signal)
+    # We can reuse the logic from `goal_relative_target` here!
+    # Ideally, refactor that logic into a helper function to avoid code duplication.
+    # For now, let's just grab the goal command directly:
+    goals = env.command_manager.get_command("goal_pos")[:, :2]
+    robot = env.scene[asset_cfg.name]
+    pos = robot.data.root_pos_w[:, :2]
+    quat = robot.data.root_quat_w
+    
+    # Calculate Goal Vector (Body Frame) - simplified for brevity
+    target_vec_w = goals - pos
+    roll, pitch, yaw = math_utils.euler_xyz_from_quat(quat)
+    # Rotate vector by -yaw to get body frame
+    # (Using simple 2D rotation for brevity, real implementation should use standard math utils)
+    cos_n = torch.cos(-yaw)
+    sin_n = torch.sin(-yaw)
+    target_vec_b_x = target_vec_w[:, 0] * cos_n - target_vec_w[:, 1] * sin_n
+    target_vec_b_y = target_vec_w[:, 0] * sin_n + target_vec_w[:, 1] * cos_n
+    
+    # Normalize or cap the distance to look like a "Lookahead" (usually 1-2m away)
+    target_dist = torch.norm(torch.stack([target_vec_b_x, target_vec_b_y], dim=-1), dim=-1, keepdim=True)
+    scale = torch.clamp(target_dist, max=1.0) / (target_dist + 1e-5) # Scale to max 1m length
+    
+    real_vec = torch.stack([target_vec_b_x, target_vec_b_y], dim=-1) * scale
+    # We need 3 dims for vector? Or 2? Let's assume 3 dims [x, y, z] for consistency with noise
+    real_vec_3d = torch.cat([real_vec, torch.zeros_like(target_dist)], dim=-1) 
+    
+    # 4. The Mask (Bernoulli Coin Flip)
+    # 10% chance of being "Real" (1.0), 90% "Noise" (0.0)
+    mask = torch.bernoulli(torch.full((env.num_envs, 1), 0.1, device=env.device))
+    
+    # 5. Combine
+    # If mask is 1, use Real Vector. If 0, use Noise.
+    final_vec = mask * real_vec_3d + (1 - mask) * noise_vec
+    final_flag = mask # 1.0 or 0.0
+    
+    # Return combined [Vector, Flag]
+    # Check your `NavObservationsCfg` to see if you defined Lookahead as 3 items or 4.
+    # If it is [Dist, Sin, Cos] + Flag, adapt the math above to return that format.
+    
+    # Assuming just returning the tensor:
+    return torch.cat([final_vec, final_flag], dim=-1)
 

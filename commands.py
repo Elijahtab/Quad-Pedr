@@ -26,7 +26,7 @@ class GoalCommand(CommandTerm):
         self.command[env_ids, 1] = r * torch.sin(theta) # Goal Y
         self.command[env_ids, 2] = 0.0 # Heading (optional)
 
-    def _update_command(self):
+    def _update_command(self, dt: float):
         """
         Called every step to update visuals.
         """
