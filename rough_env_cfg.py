@@ -105,7 +105,7 @@ class NavRewardsCfg(LocomotionVelocityRoughEnvCfg.RewardsCfg):
 @configclass
 class NavCommandsCfg(LocomotionVelocityRoughEnvCfg.CommandsCfg):
     """Define our commands."""
-    
+
     # 1. Velocity Command (Active for Milestones 1-3)
     base_velocity = mdp.UniformVelocityCommandCfg(
         asset_name="robot",
@@ -117,9 +117,9 @@ class NavCommandsCfg(LocomotionVelocityRoughEnvCfg.CommandsCfg):
         debug_vis=True,
         # MILESTONE 1 SETTINGS: FROZEN (0.0)
         ranges=mdp.UniformVelocityCommandCfg.Ranges(
-            lin_vel_x=(0.0, 0.0), 
-            lin_vel_y=(0.0, 0.0), 
-            ang_vel_z=(0.0, 0.0), 
+            lin_vel_x=(0.0, 0.0),
+            lin_vel_y=(0.0, 0.0),
+            ang_vel_z=(0.0, 0.0),
             heading=(0.0, 0.0)
         ),
     )
@@ -161,11 +161,10 @@ class NavTerminationsCfg(LocomotionVelocityRoughEnvCfg.TerminationsCfg):
     # 2. Base Contact (Fall detection)
     base_contact = mdp.TerminationTermCfg(
         func=mdp.illegal_contact,
-        # NOTE: Go2 body name is usually "base", not "trunk"
+        # NOTE: Go2 body name is usually "base"
         params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names="base"), "threshold": 1.0}
     )
 
-    # 3. [NEW] Bad Orientation (Reset if pitch/roll > 1.5 rads / ~86 deg)
     bad_orientation = mdp.TerminationTermCfg(
         func=mdp.bad_orientation,
         params={"asset_cfg": SceneEntityCfg("robot"), "limit_angle": 1.5}
@@ -202,6 +201,7 @@ class UnitreeGo2RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
             attach_yaw_only=True,
             pattern_cfg=patterns.LidarPatternCfg(
                 channels=1,
+                vertical_fov_range=(0.0, 0.0),
                 horizontal_fov_range=(-180.0, 180.0), # 360 deg
                 horizontal_res=1.0,                   # 1 deg resolution -> 360 rays
             ),
@@ -231,7 +231,7 @@ class UnitreeGo2RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
 
         # 4. REWARD TUNING (Go2 Specifics)
         self.rewards.feet_air_time.params["sensor_cfg"].body_names = ".*_foot"
-        self.rewards.feet_air_time.weight = 0.3 # Increased for stability
+        self.rewards.feet_air_time.weight = 0.5 # Increased for stability
         # self.rewards.feet_air_time.params["command_name"] = "goal_pos" # MILESTONE 4: UNCOMMENT THIS LINE
         self.rewards.dof_torques_l2.weight = -0.0002
         self.rewards.track_lin_vel_xy_exp.weight = 1.5
@@ -243,12 +243,12 @@ class UnitreeGo2RoughEnvCfg(LocomotionVelocityRoughEnvCfg):
 
         # 5. DOMAIN RANDOMIZATION (if we want it)
         # We will need this for Sim-to-Real
-        self.events.randomize_mass = mdp.EventTermCfg(
-            func=mdp.randomize_rigid_body_mass,
-            mode="startup",
-            params={
-                "asset_cfg": SceneEntityCfg("robot", body_names="base"),
-                "mass_distribution_params": (-1.0, 1.0), # +/- 1kg
-                "operation": "add",
-            },
-        )
+        # self.events.randomize_mass = mdp.EventTermCfg(
+        #     func=mdp.randomize_rigid_body_mass,
+        #     mode="startup",
+        #     params={
+        #         "asset_cfg": SceneEntityCfg("robot", body_names="base"),
+        #         "mass_distribution_params": (-1.0, 1.0), # +/- 1kg
+        #         "operation": "add",
+        #     },
+        # )
