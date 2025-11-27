@@ -1,0 +1,19 @@
+
+
+COMMANDS: 
+
+
+Train
+```
+./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/train.py --task=Isaac-Nav-Go2-v0 --headless
+```
+
+Watch
+```
+./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/play.py --task=Isaac-Nav-Go2-v0 --video --video_length 200
+```
+
+FLAGS:
+--task=Isaac-Nav-Go2-Flat-v0
+
+--num_envs NUM_ENVS
