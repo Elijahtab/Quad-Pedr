@@ -88,7 +88,6 @@ class NavObservationsCfg(BaseObservationsCfg):
         # NAV-SPECIFIC OBS TERMS
         # ---------------------
         if TRAINING_MILESTONE <= 3:
-
             goal_relative: ObsTerm = ObsTerm(
                 func=custom_obs.goal_relative_placeholder,
                 params={"asset_cfg": SceneEntityCfg("robot")},
