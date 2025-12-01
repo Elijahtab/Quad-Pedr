@@ -43,7 +43,7 @@ gym.register(
 )
 
 gym.register(
-    id="Isaac-Navigation-Flat-Go2-v0",
+    id="Isaac-Nav-Flat-Go2-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
@@ -54,7 +54,7 @@ gym.register(
 )
 
 gym.register(
-    id="Isaac-Navigation-Flat-Go2-Play-v0",
+    id="Isaac-Nav-Flat-Go2-Play-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
