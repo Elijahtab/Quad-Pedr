@@ -65,4 +65,5 @@ class UnitreeGo2FlatEnvCfg_PLAY(UnitreeGo2FlatEnvCfg):
         self.events.base_external_force_torque = None
         self.events.push_robot = None
         
-        self.commands.gait_params.fixed_height = -0.08
+        self.commands.base_velocity.resampling_time_range = (1e9, 1e9)
+        self.commands.gait_params.resampling_time_range = (1e9, 1e9)
