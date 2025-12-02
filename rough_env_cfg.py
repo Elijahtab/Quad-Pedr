@@ -142,7 +142,7 @@ class NavSceneCfg(BaseSceneCfg):
             horizontal_res=1.0,
         ),
         mesh_prim_paths=["/World/ground"],   # FIXED
-        debug_vis=False,
+        debug_vis=True,
     )
 
 

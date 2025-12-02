@@ -19,6 +19,7 @@ from isaaclab_tasks.manager_based.locomotion.velocity.config.go2_nav.rough_env_c
 from isaaclab_tasks.manager_based.locomotion.velocity.config.go2_nav import commands
 
 # Your nav-specific scene + sensor config (LiDAR, etc.)
+from . import custom_obs
 
 # If you keep custom Obs / commands in a nav mdp package, import here.
 # For stage 1 we only need standard mdp.* terms, so no custom imports are required.
@@ -117,16 +118,20 @@ class ObservationsCfg:
             params={"command_name": "pose_command"},
         )
 
-        # --- Future: LiDAR (for stages with obstacles) ---
-        # For stage 1 (no obstacles) you can keep this *disabled* to make
-        # training easier. Once you start adding walls / obstacles, you can
-        # uncomment this (and implement custom_obs.placeholder_lidar).
-        #
-        # lidar_scan = ObsTerm(
-        #     func=custom_obs.placeholder_lidar,
-        #     params={"sensor_cfg": SceneEntityCfg("lidar")},
-        #     clip=(0.0, 10.0),
-        # )
+        # LiDAR scan (flattened distances)
+        lidar_scan = ObsTerm(
+            func=custom_obs.lidar_scan,
+            params={
+                "sensor_cfg": SceneEntityCfg("lidar"),
+                "max_distance": 10.0,
+            },
+            clip=(0.0, 1.0),
+        )
+
+        # # Lookahead (placeholder for now)
+        lookahead_hint = ObsTerm(
+            func=custom_obs.lookahead_hint
+        )
 
     # observation groups
     policy: PolicyCfg = PolicyCfg()
@@ -162,7 +167,7 @@ class RewardsCfg:
     # Penalize heading error so the robot turns to face the goal heading.
     orientation_tracking = RewTerm(
         func=nav_mdp.heading_command_error_abs,
-        weight=-0.2,
+        weight=-1.0,
         params={"command_name": "pose_command"},
     )
 
@@ -225,7 +230,7 @@ class NavigationEnvCfg(ManagerBasedRLEnvCfg):
         num_envs=LOW_LEVEL_ENV_CFG.scene.num_envs,
         env_spacing=LOW_LEVEL_ENV_CFG.scene.env_spacing,
         robot=LOW_LEVEL_ENV_CFG.scene.robot,
-        lidar=LOW_LEVEL_ENV_CFG.scene.lidar,
+        # lidar=LOW_LEVEL_ENV_CFG.scene.lidar,
     )
 
     # Managers

@@ -62,6 +62,42 @@ def placeholder_lidar(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> tor
     return torch.rand((env.num_envs, 360), device=env.device)
 
 
+def lidar_scan(
+    env,
+    sensor_cfg: SceneEntityCfg,
+    max_distance: float = 10.0,
+):
+    """
+    Returns normalized LiDAR ranges in [0, 1].
+    Shape: (num_envs, num_rays)
+    """
+    lidar = env.scene[sensor_cfg.name]      # "lidar" sensor from NavSceneCfg
+    data = lidar.data                       # RayCasterData
+
+    # Origins: (num_envs, 3)
+    origins = data.pos_w                    # world-space sensor positions
+    # Hits: (num_envs, num_rays, 3)
+    hits = data.ray_hits_w                  # world-space hit positions
+
+    # Broadcast origins to match hits
+    origins_exp = origins.unsqueeze(1)      # (num_envs, 1, 3)
+
+    # Euclidean distances
+    distances = torch.norm(hits - origins_exp, dim=-1)  # (num_envs, num_rays)
+
+    # RayCaster usually returns +inf (or very large) for no-hit; clamp + normalize.
+    distances = torch.nan_to_num(
+        distances,
+        nan=max_distance,
+        posinf=max_distance,
+        neginf=0.0,
+    )
+    distances = torch.clamp(distances, 0.0, max_distance) / max_distance
+
+    return distances
+
+
+
 def lidar_scan_normalized(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
     """Reads the RayCaster, clips distance, and normalizes 0-1."""
     # 1. Get the sensor object
@@ -102,6 +138,7 @@ def lookahead_hint(env: ManagerBasedRLEnv) -> torch.Tensor:
 
     # 3. Combine
     return torch.cat([noise_vec, flag], dim=-1)
+
 
 def safe_height_scan(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
     """
