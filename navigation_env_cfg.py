@@ -16,6 +16,7 @@ from isaaclab_tasks.manager_based.locomotion.velocity.config.go2_nav.rough_env_c
     UnitreeGo2RoughEnvCfg,
     NavSceneCfg,
 )
+from isaaclab_tasks.manager_based.locomotion.velocity.config.go2_nav import commands
 
 # Your nav-specific scene + sensor config (LiDAR, etc.)
 
@@ -28,8 +29,8 @@ import isaaclab_tasks.manager_based.navigation.mdp as nav_mdp
 
 # Low-level config instance (ONLY used as a template; we never step it directly)
 LOW_LEVEL_ENV_CFG = UnitreeGo2RoughEnvCfg()
-MODEL_DIR = "/home/elijah/IsaacLab/logs/rsl_rl/unitree_go2_rough/2025-12-01_12-59-50/"
-MODEL_NAME = "model_1499.pt"
+MODEL_DIR = "/home/elijah/IsaacLab/logs/rsl_rl/unitree_go2_rough/2025-12-01_12-59-50/exported/"
+MODEL_NAME = "policy.pt"
 
 
 @configclass
@@ -187,6 +188,8 @@ class CommandsCfg:
         ),
     )
 
+    gait_params: commands.GaitParamCommandCfg = commands.GaitParamCommandCfg() 
+
 
 @configclass
 class TerminationsCfg:
@@ -218,7 +221,12 @@ class NavigationEnvCfg(ManagerBasedRLEnvCfg):
     """Configuration for the Go2 navigation environment (stage 1)."""
 
     # Scene: reuse your nav-specific scene (Go2 + terrain + LiDAR)
-    scene: NavSceneCfg = NavSceneCfg()
+    scene: NavSceneCfg = NavSceneCfg(
+        num_envs=LOW_LEVEL_ENV_CFG.scene.num_envs,
+        env_spacing=LOW_LEVEL_ENV_CFG.scene.env_spacing,
+        robot=LOW_LEVEL_ENV_CFG.scene.robot,
+        lidar=LOW_LEVEL_ENV_CFG.scene.lidar,
+    )
 
     # Managers
     actions: ActionsCfg = ActionsCfg()
@@ -232,6 +240,9 @@ class NavigationEnvCfg(ManagerBasedRLEnvCfg):
 
     def __post_init__(self):
         """Post initialization to keep nav env consistent with low-level env."""
+        # Flatten the terrain taken from NavSceneCfg (which came from rough_env_cfg)
+        self.scene.terrain.terrain_type = "plane"
+        self.scene.terrain.terrain_generator = None
 
         # Use the same physics dt as the low-level env.
         self.sim.dt = LOW_LEVEL_ENV_CFG.sim.dt
