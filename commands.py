@@ -127,7 +127,7 @@ class GaitParamCommandCfg(CommandTermCfg):
     @configclass
     class Ranges:
         """Uniform ranges for gait parameters."""
-        height: tuple[float, float] = (-0.1, 0.1)   # m offset from nominal
+        height: tuple[float, float] = (0, 0)   # m offset from nominal - Normally (-0.1, 0.1)
         freq: tuple[float, float] = (2.0, 4.0)      # Hz
         clearance: tuple[float, float] = (0.1, 0.20)  # m
 
