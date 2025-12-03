@@ -187,7 +187,7 @@ class RewardsCfg:
     # Coarse position tracking: encourages moving toward the goal in XY.
     position_tracking = RewTerm(
         func=nav_mdp.position_command_error_tanh,
-        weight=0.5,
+        weight=0.75,
         params={
             "std": 2.0,                # wide basin
             "command_name": "pose_command",
@@ -197,7 +197,7 @@ class RewardsCfg:
     # Fine position tracking: tightens around the goal as you get closer.
     position_tracking_fine_grained = RewTerm(
         func=nav_mdp.position_command_error_tanh,
-        weight=0.5,
+        weight=1.0,
         params={
             "std": 0.2,                # narrow basin
             "command_name": "pose_command",
@@ -207,7 +207,7 @@ class RewardsCfg:
     # Penalize heading error so the robot turns to face the goal heading.
     orientation_tracking = RewTerm(
         func=nav_mdp.heading_command_error_abs,
-        weight=-0.5,
+        weight=-0.1,
         params={"command_name": "pose_command"},
     )
 
@@ -226,11 +226,11 @@ class RewardsCfg:
     # NEW: LiDAR-based obstacle clearance reward
     obstacle_clearance = RewTerm(
         func=custom_rewards.obstacle_clearance_reward,
-        weight=0.2,  # start small; tune later
+        weight=0.05,  # start small; tune later
         params={
             "sensor_cfg": SceneEntityCfg("lidar"),
-            "min_clearance": 0.5,
-            "max_distance": 10.0,
+            "min_clearance": 0.25,
+            "max_distance": 1.5,
         },
     )
 
