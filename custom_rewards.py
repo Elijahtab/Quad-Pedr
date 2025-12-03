@@ -198,7 +198,11 @@ def obstacle_clearance_reward(
     closeness = torch.clamp((min_clearance - d) / min_clearance, min=0.0, max=1.0)
 
     # Worst-case closeness per env
-    worst = closeness.max(dim=1).values  # (num_envs,)
+    k = 10
+    topk_vals, _ = torch.topk(closeness, k=k, dim=1)
+    worst = topk_vals.mean(dim=1)
+    
+    # worst = closeness.max(dim=1).values  # (num_envs,)
 
     # Reward is high when worst closeness is low (i.e., far from obstacles)
     reward = 1.0 - worst

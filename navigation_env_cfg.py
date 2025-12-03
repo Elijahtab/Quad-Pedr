@@ -23,7 +23,7 @@ from isaaclab_tasks.manager_based.locomotion.velocity.config.go2_nav import comm
 
 # Your nav-specific scene + sensor config (LiDAR, etc.)
 from . import custom_obs
-from isaaclab_tasks.manager_based.locomotion.velocity.config.go2_nav import commands, custom_events, custom_rewards
+from isaaclab_tasks.manager_based.locomotion.velocity.config.go2_nav import commands, custom_events, custom_rewards, custom_terminations
 
 # If you keep custom Obs / commands in a nav mdp package, import here.
 # For stage 1 we only need standard mdp.* terms, so no custom imports are required.
@@ -210,6 +210,7 @@ class RewardsCfg:
 
     # Optional: small alive bonus to encourage longer survival
     # alive_bonus = RewTerm(func=mdp.is_alive, weight=1.0)
+
     # goal_proximity = RewTerm(
     #     func=custom_rewards.goal_proximity_exp,
     #     weight=1.0,  # tune up/down if needed
@@ -218,16 +219,17 @@ class RewardsCfg:
     #         "alpha": 1.0,
     #     },
     # )
-    # # NEW: LiDAR-based obstacle clearance reward
-    # obstacle_clearance = RewTerm(
-    #     func=custom_rewards.obstacle_clearance_reward,
-    #     weight=0.2,  # start small; tune later
-    #     params={
-    #         "sensor_cfg": SceneEntityCfg("lidar"),
-    #         "min_clearance": 0.5,
-    #         "max_distance": 10.0,
-    #     },
-    # )
+
+    # NEW: LiDAR-based obstacle clearance reward
+    obstacle_clearance = RewTerm(
+        func=custom_rewards.obstacle_clearance_reward,
+        weight=0.2,  # start small; tune later
+        params={
+            "sensor_cfg": SceneEntityCfg("lidar"),
+            "min_clearance": 0.5,
+            "max_distance": 10.0,
+        },
+    )
 
 
 
@@ -276,6 +278,17 @@ class TerminationsCfg:
         },
     )
 
+    # # Lidar-based Obstacle collision
+    # # (not needed anymore, but we can always bring it back if ghosting starts happening, to be safe)
+    # obstacle_collision = DoneTerm(
+    #     func=custom_terminations.obstacle_collision_from_lidar,
+    #     params={
+    #         "sensor_cfg": SceneEntityCfg("lidar"),
+    #         "min_distance": 0.2,
+    #         "max_distance": 10.0,
+    #     },
+    # )
+
 
 @configclass
 class NavigationEnvCfg(ManagerBasedRLEnvCfg):
@@ -313,6 +326,11 @@ class NavigationEnvCfg(ManagerBasedRLEnvCfg):
         # One nav step = N low-level steps. Here we keep the same pattern as
         # the ANYmal navigation env: nav policy updates 10x slower.
         self.decimation = LOW_LEVEL_ENV_CFG.decimation * 10
+
+        # Fix patch buffer overflow
+        # Default is 5 * 2**15, but we need at least 262144
+        # 10 * 2**15 = 327680 (> 262144)
+        self.sim.physx.gpu_max_rigid_patch_count = 10 * 2**15
 
         # Episode length is tied to the goal resampling window.
         self.episode_length_s = self.commands.pose_command.resampling_time_range[1]

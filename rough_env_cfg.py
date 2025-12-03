@@ -1,6 +1,7 @@
 # go2_nav/rough_env_cfg.py
 
 import isaaclab.sim as sim_utils
+from isaaclab.assets import AssetBaseCfg
 
 from isaaclab.utils import configclass
 from isaaclab.managers import SceneEntityCfg
@@ -154,6 +155,16 @@ class NavSceneCfg(BaseSceneCfg):
         debug_vis=False,
     )
 
+    # Nice visual floor
+    # ground = AssetBaseCfg(
+    #     prim_path="/World/defaultGroundPlane",
+    #     spawn=sim_utils.GroundPlaneCfg(
+    #         size=(50.0, 50.0),       # make it big enough for all envs
+    #         color=(0.25, 0.25, 0.25),# mid-grey instead of black
+    #         visible=True,
+    #     ),
+    # )
+
     obstacles: RigidObjectCollectionCfg = RigidObjectCollectionCfg(
         rigid_objects={
             f"obstacle_{i}": RigidObjectCfg(
@@ -167,8 +178,8 @@ class NavSceneCfg(BaseSceneCfg):
                         roughness=0.9,
                     ),
                     rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                        kinematic_enabled=True,
-                        disable_gravity=True,
+                        kinematic_enabled=True,    # <- static rigid object
+                        disable_gravity=True,      # doesn’t sag or fall
                     ),
                     collision_props=sim_utils.CollisionPropertiesCfg(
                         collision_enabled=True,
