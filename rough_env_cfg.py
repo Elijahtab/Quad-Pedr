@@ -11,7 +11,6 @@ from isaaclab.managers import (
 )
 from isaaclab.sensors import RayCasterCfg, patterns, ContactSensorCfg
 
-import isaaclab.sim as sim_utils
 from isaaclab.assets import RigidObjectCfg, RigidObjectCollectionCfg
 
 # Use the same mdp module as the base configs
@@ -152,38 +151,43 @@ class NavSceneCfg(BaseSceneCfg):
             horizontal_res=1.0,
         ),
         mesh_prim_paths=["/World/ground"],
-        debug_vis=True,
+        debug_vis=False,
     )
 
     obstacles: RigidObjectCollectionCfg = RigidObjectCollectionCfg(
         rigid_objects={
             f"obstacle_{i}": RigidObjectCfg(
-                prim_path=f"/World/envs/env_.*/NavObstacle_{i}",
+                prim_path="{ENV_REGEX_NS}/NavObstacle_" + str(i),
+
                 spawn=sim_utils.CuboidCfg(
-                    size=OBSTACLE_SIZE,
+                    size=(0.4, 0.4, 0.4),
+                    visual_material=sim_utils.PreviewSurfaceCfg(
+                        diffuse_color=(0.8, 0.1, 0.1),
+                        metallic=0.0,
+                        roughness=0.9,
+                    ),
                     rigid_props=sim_utils.RigidBodyPropertiesCfg(
-                        # THIS is the important part:
-                        # kinematic = static: not affected by gravity or forces
                         kinematic_enabled=True,
-                        # do NOT set disable_gravity=True, you don’t need it here
+                        disable_gravity=True,
                     ),
                     collision_props=sim_utils.CollisionPropertiesCfg(
                         collision_enabled=True,
-                    ),
-                    visual_material=sim_utils.PreviewSurfaceCfg(
-                        diffuse_color=(0.4, 0.4, 0.4),
+                        contact_offset=0.02,
+                        rest_offset=0.0,
                     ),
                 ),
+
                 init_state=RigidObjectCfg.InitialStateCfg(
-                    # center at half the height so they rest on z=0 ground
-                    pos=(1.5, 0.0, OBSTACLE_SIZE[2] * 0.5),
-                    rot=(1.0, 0.0, 0.0, 0.0),  # identity quaternion = “flat”
+                    pos=(0.0, 0.0, 0.3),
+                    # rot=(0.0, 0.0, 0.0, 1.0),
                 ),
+
+                # this doesn't exist on RigidObjectCfg
+                # activate_contact_sensors=True,
             )
-            for i in range(MAX_OBSTACLES_PER_ENV)
+            for i in range(4)
         }
     )
-
 
 
 # ======================================================================

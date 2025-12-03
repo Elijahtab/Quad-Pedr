@@ -138,6 +138,76 @@ def base_height_l2_safe(
 
     return rew
 
+def goal_proximity_exp(
+    env,
+    asset_cfg: SceneEntityCfg,
+    alpha: float = 1.0,
+):
+    """
+    Reward for being close to the goal based on goal_relative_target.
+
+    goal_relative_target returns [distance, sin(d_heading), cos(d_heading)].
+
+    We use an exponential: reward = exp(-alpha * distance)
+    so:
+        - distance = 0   → reward = 1
+        - distance ~ 3m  → reward ~ exp(-3) ≈ 0.05 (if alpha=1)
+    """
+    # [num_envs, 3] = [dist, sin(d_heading), cos(d_heading)]
+    rel = custom_obs.goal_relative_target(env, asset_cfg)
+    dist = rel[:, 0]  # (num_envs,)
+
+    # Stable exponential reward in [0, 1]
+    dist_clamped = torch.clamp(dist, min=0.0)
+    reward = torch.exp(-alpha * dist_clamped)
+
+    # Safety
+    if torch.isnan(reward).any() or torch.isinf(reward).any():
+        raise RuntimeError("goal_proximity_exp produced non-finite values")
+
+    return reward
+
+def obstacle_clearance_reward(
+    env,
+    sensor_cfg: SceneEntityCfg,
+    min_clearance: float = 0.5,
+    max_distance: float = 10.0,
+):
+    """
+    Reward staying away from obstacles based on analytic LiDAR.
+
+    - Uses custom_obs.lidar_scan: normalized distances in [0, 1]
+      where 1.0 = no hit within max_distance, 0.0 = on top of obstacle.
+
+    We compute, per env:
+        closeness = max over rays of clamp((min_clearance - d) / min_clearance, 0, 1)
+    and then:
+        reward = 1 - closeness
+
+    So:
+        - All obstacles farther than min_clearance → reward = 1
+        - Something right up against the robot     → reward ~ 0
+    """
+    # [num_envs, num_rays] in [0,1]
+    d_norm = custom_obs.lidar_scan(env, sensor_cfg, max_distance=max_distance)
+
+    # Convert back to meters
+    d = d_norm * max_distance  # (num_envs, num_rays)
+
+    # 1 when at 0m, 0 when >= min_clearance
+    closeness = torch.clamp((min_clearance - d) / min_clearance, min=0.0, max=1.0)
+
+    # Worst-case closeness per env
+    worst = closeness.max(dim=1).values  # (num_envs,)
+
+    # Reward is high when worst closeness is low (i.e., far from obstacles)
+    reward = 1.0 - worst
+
+    # Safety check
+    if torch.isnan(reward).any() or torch.isinf(reward).any():
+        raise RuntimeError("obstacle_clearance_reward produced non-finite values")
+
+    return reward
 
 
 def track_feet_clearance_exp(

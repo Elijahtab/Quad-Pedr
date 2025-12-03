@@ -23,6 +23,7 @@ from isaaclab_tasks.manager_based.locomotion.velocity.config.go2_nav import comm
 
 # Your nav-specific scene + sensor config (LiDAR, etc.)
 from . import custom_obs
+from isaaclab_tasks.manager_based.locomotion.velocity.config.go2_nav import commands, custom_events, custom_rewards
 
 # If you keep custom Obs / commands in a nav mdp package, import here.
 # For stage 1 we only need standard mdp.* terms, so no custom imports are required.
@@ -148,6 +149,11 @@ class ObservationsCfg:
             func=nav_mdp.generated_commands,
             params={"command_name": "pose_command"},
         )
+        
+        goal_relative = ObsTerm(
+            func=custom_obs.goal_relative_target,
+            params={"asset_cfg": SceneEntityCfg("robot")},
+        )
 
         # LiDAR scan (flattened distances)
         lidar_scan = ObsTerm(
@@ -204,6 +210,25 @@ class RewardsCfg:
 
     # Optional: small alive bonus to encourage longer survival
     # alive_bonus = RewTerm(func=mdp.is_alive, weight=1.0)
+    # goal_proximity = RewTerm(
+    #     func=custom_rewards.goal_proximity_exp,
+    #     weight=1.0,  # tune up/down if needed
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot"),
+    #         "alpha": 1.0,
+    #     },
+    # )
+    # # NEW: LiDAR-based obstacle clearance reward
+    # obstacle_clearance = RewTerm(
+    #     func=custom_rewards.obstacle_clearance_reward,
+    #     weight=0.2,  # start small; tune later
+    #     params={
+    #         "sensor_cfg": SceneEntityCfg("lidar"),
+    #         "min_clearance": 0.5,
+    #         "max_distance": 10.0,
+    #     },
+    # )
+
 
 
 @configclass
@@ -299,6 +324,13 @@ class NavigationEnvCfg(ManagerBasedRLEnvCfg):
             )
         if getattr(self.scene, "contact_forces", None) is not None:
             self.scene.contact_forces.update_period = self.sim.dt
+
+        # print("\n\n----------------")
+        # if getattr(self.scene, "obstacles", None) is not None:
+        #     print("amount of obstacles:", len(self.scene.obstacles.rigid_objects.keys()))
+        # else:
+        #     print("NO OBSTACLES TYPE IN THE SCENE")
+        # print("----------------\n\n")
 
 
 class NavigationEnvCfg_PLAY(NavigationEnvCfg):

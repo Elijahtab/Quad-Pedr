@@ -3,7 +3,7 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.envs import ManagerBasedRLEnv
 import isaaclab.utils.math as math_utils  # Contains the crucial conversion tools
 import isaaclab.envs.mdp as mdp
-
+import math
 
 # Placeholder function (fills with 0's)
 def goal_relative_placeholder(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
@@ -21,7 +21,7 @@ def goal_relative_target(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> t
     robot = env.scene[asset_cfg.name]
 
     # goals shape: [num_envs, 2] (X, Y)
-    goals = env.command_manager.get_command("goal_pos")[:, :2]
+    goals = env.command_manager.get_command("pose_command")[:, :2]
 
     # robot pos shape: [num_envs, 3] (X, Y, Z) - we only need X,Y
     pos = robot.data.root_pos_w[:, :2]
@@ -63,38 +63,76 @@ def placeholder_lidar(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> tor
 
 
 def lidar_scan(
-    env,
-    sensor_cfg: SceneEntityCfg,
+    env: ManagerBasedRLEnv,
+    sensor_cfg: SceneEntityCfg,      # kept for API compatibility; we won't use it
     max_distance: float = 10.0,
-):
-    """
-    Returns normalized LiDAR ranges in [0, 1].
-    Shape: (num_envs, num_rays)
-    """
-    lidar = env.scene[sensor_cfg.name]      # "lidar" sensor from NavSceneCfg
-    data = lidar.data                       # RayCasterData
+) -> torch.Tensor:
+    ...
+    scene = env.scene
+    robot = scene["robot"]
 
-    # Origins: (num_envs, 3)
-    origins = data.pos_w                    # world-space sensor positions
-    # Hits: (num_envs, num_rays, 3)
-    hits = data.ray_hits_w                  # world-space hit positions
+    base_xy = robot.data.root_pos_w[:, :2]
+    quat = robot.data.root_quat_w
+    roll, pitch, yaw = math_utils.euler_xyz_from_quat(quat)
 
-    # Broadcast origins to match hits
-    origins_exp = origins.unsqueeze(1)      # (num_envs, 1, 3)
+    obstacles = scene["obstacles"]  # RigidObjectCollection
+    num_objs = obstacles.num_objects
+    num_rays = 360
 
-    # Euclidean distances
-    distances = torch.norm(hits - origins_exp, dim=-1)  # (num_envs, num_rays)
+    if num_objs == 0:
+        return torch.ones((env.num_envs, num_rays), device=env.device, dtype=torch.float32)
 
-    # RayCaster usually returns +inf (or very large) for no-hit; clamp + normalize.
-    distances = torch.nan_to_num(
-        distances,
-        nan=max_distance,
-        posinf=max_distance,
-        neginf=0.0,
-    )
-    distances = torch.clamp(distances, 0.0, max_distance) / max_distance
+    # Use collection data API (Isaac Lab 2.3+)
+    # Shape: [num_envs, num_objs, 7] (pos xyz, quat wxyz)
+    obj_pose = obstacles.data.object_link_pose_w
+    obs_xy_world = obj_pose[..., :2]  # [N, M, 2]
 
-    return distances
+    # ... everything else stays the same ...
+    rel_world = obs_xy_world - base_xy.unsqueeze(1)   # [N, M, 2]
+
+    cos_yaw = torch.cos(yaw)
+    sin_yaw = torch.sin(yaw)
+    dx = rel_world[..., 0]
+    dy = rel_world[..., 1]
+
+    x_body =  cos_yaw.unsqueeze(-1) * dx + sin_yaw.unsqueeze(-1) * dy
+    y_body = -sin_yaw.unsqueeze(-1) * dx + cos_yaw.unsqueeze(-1) * dy
+    rel_body = torch.stack((x_body, y_body), dim=-1)   # [N, M, 2]
+
+    angles = torch.linspace(-math.pi, math.pi, steps=num_rays + 1, device=env.device)[:-1]
+    dir_x = torch.cos(angles)
+    dir_y = torch.sin(angles)
+    dirs = torch.stack((dir_x, dir_y), dim=-1)         # [R, 2]
+
+    rel_exp = rel_body[:, None, :, :]   # [N, R=1, M, 2]
+    dirs_exp = dirs[None, :, None, :]   # [1, R, 1, 2]
+
+    radius = 0.3
+    dot_dc = (dirs_exp * rel_exp).sum(dim=-1)         # [N, R, M]
+    c2 = (rel_exp ** 2).sum(dim=-1)                   # [N, R, M]
+    disc = dot_dc ** 2 - (c2 - radius ** 2)
+    disc_clamped = torch.clamp(disc, min=0.0)
+    sqrt_disc = torch.sqrt(disc_clamped)
+
+    t1 = dot_dc - sqrt_disc
+    t2 = dot_dc + sqrt_disc
+
+    t_candidates = torch.where(t1 > 0.0, t1, t2)
+    valid = (disc >= 0.0) & (t_candidates > 0.0)
+
+    inf = torch.full_like(t_candidates, float("inf"))
+    t_candidates = torch.where(valid, t_candidates, inf)
+
+    dist, _ = t_candidates.min(dim=-1)  # [N, R]
+    dist = torch.where(torch.isinf(dist),
+                       torch.full_like(dist, max_distance),
+                       dist)
+
+    dist = torch.clamp(dist, 0.0, max_distance)
+    dist_norm = dist / max_distance
+    return dist_norm
+
+
 
 
 
