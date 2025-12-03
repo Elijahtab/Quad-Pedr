@@ -39,16 +39,16 @@ from isaaclab_tasks.manager_based.locomotion.velocity.config.go2_nav import comm
 import isaaclab_tasks.manager_based.navigation.mdp as nav_mdp
 
 # Low-level config instance (ONLY used as a template; we never step it directly)
-# LOW_LEVEL_ENV_CFG = UnitreeGo2RoughEnvCfg()
-LOW_LEVEL_ENV_CFG = UnitreeGo2FlatEnvCfg()
-# MODEL_DIR = "/home/elijah/IsaacLab/logs/rsl_rl/unitree_go2_rough/2025-12-01_12-59-50/exported/"
-MODEL_DIR = "/home/elijah/IsaacLab/logs/rsl_rl/unitree_go2_flat/2025-12-01_03-24-08/exported/"
+LOW_LEVEL_ENV_CFG = UnitreeGo2RoughEnvCfg()
+# LOW_LEVEL_ENV_CFG = UnitreeGo2FlatEnvCfg()
+MODEL_DIR = "/home/elijah/IsaacLab/logs/rsl_rl/unitree_go2_rough/2025-12-01_12-59-50/exported/"
+# MODEL_DIR = "/home/elijah/IsaacLab/logs/rsl_rl/unitree_go2_flat/2025-12-01_03-24-08/exported/"
 MODEL_NAME = "policy.pt"
 
 # How “busy” the env can be.
-GOAL_RADIUS = 3.0
-OBSTACLE_RADIUS = 3.0
-RESAMPLE_TIME = 8.0
+GOAL_RADIUS = 5.0
+OBSTACLE_RADIUS = 6.0
+RESAMPLE_TIME = 15.0
 
 
 @configclass
@@ -230,13 +230,13 @@ class RewardsCfg:
     # )
 
     # lateral walking penalty (penalizes crab-walk)
-    lateral_penalty = RewTerm(
-        func=custom_rewards.motion_shape_penalty,
-        weight=-0.05,  # start here, tune
-        params={
-            "speed_deadzone": 0.05,
-        },
-    )
+    # lateral_penalty = RewTerm(
+    #     func=custom_rewards.motion_shape_penalty,
+    #     weight=-0.05,  # start here, tune
+    #     params={
+    #         "speed_deadzone": 0.05,
+    #     },
+    # )
 
     # LiDAR-based obstacle clearance reward
     # obstacle_clearance = RewTerm(
@@ -348,7 +348,7 @@ class NavigationEnvCfg(ManagerBasedRLEnvCfg):
         # Fix patch buffer overflow
         # Default is 5 * 2**15, but we need at least 262144
         # 10 * 2**15 = 327680 (> 262144)
-        self.sim.physx.gpu_max_rigid_patch_count = 10 * 2**15
+        self.sim.physx.gpu_max_rigid_patch_count = 10 * 2**16
 
         # Episode length is tied to the goal resampling window.
         self.episode_length_s = self.commands.pose_command.resampling_time_range[1]

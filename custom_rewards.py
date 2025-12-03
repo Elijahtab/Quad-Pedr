@@ -46,7 +46,7 @@ def motion_shape_penalty(
         backward_weight * backward_frac
     )  # [N], in [0, lateral_weight + backward_weight]
 
-    return -penalty
+    return penalty
 
 
 def track_commanded_height_flat(

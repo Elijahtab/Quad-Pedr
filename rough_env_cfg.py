@@ -35,7 +35,7 @@ from . import custom_obs, custom_rewards, commands
 import math
 
 # How “busy” the env can be.
-NUMBER_OF_OBSTACLES = 1
+NUMBER_OF_OBSTACLES = 16
 
 
 
