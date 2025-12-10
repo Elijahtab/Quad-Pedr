@@ -23,7 +23,7 @@ _DEBUG_DRAW = None
 # ENABLE_LOOKAHEAD_DEBUG_DRAW: bool = False
 # DEBUG_LOOKAHEAD_ENV_ID: int = 0  # which env index to visualize (usually 0)
 # For toggling this on:
-ENABLE_LOOKAHEAD_DEBUG_DRAW = False
+ENABLE_LOOKAHEAD_DEBUG_DRAW = True
 DEBUG_LOOKAHEAD_ENV_ID = 0   # whichever env index you care about
 
 
@@ -534,17 +534,19 @@ def lookahead_hint(
 ) -> torch.Tensor:
     """Return [dx, dy, path_progress, hint_active] for each env.
 
-    - dx, dy are in the robot base frame (XY plane).
-    - path_progress in [0, 1] = arclength along ORIGINAL A* path from start to robot / original total path length.
-    - hint_active is 1.0 if a valid path exists, otherwise 0.0 and the rest are zeros.
+    Heavy work on CPU, output on GPU.
     """
-    device = env.device
+    # ---- output stays on GPU ----
+    device_out = env.device
     num_envs = env.num_envs
+    out = torch.zeros((num_envs, 4), device=cpu, dtype=torch.float32)
 
-    out = torch.zeros((num_envs, 4), device=device, dtype=torch.float32)
     #TODO: WHEN UPGRADING TO 4D LOOKAHEAD (plus hint):
     # 5 dims: dx, dy, path_progress, detour_norm, hint_active
     # out = torch.zeros((num_envs, 5), device=device, dtype=torch.float32)
+
+    # ---- heavy work device ----
+    cpu = torch.device("cpu")
 
     scene = env.scene
     if "robot" not in scene.keys() or "obstacles" not in scene.keys():
@@ -553,38 +555,36 @@ def lookahead_hint(
     robot = scene["robot"]
     obstacles = scene["obstacles"]
 
-    # Full base position (x, y, z) for debug drawing
-    base_pos_w_full = robot.data.root_pos_w[:, :3] # (N, 3)
+    # Keep full base position for debug draw (can remain on GPU; debug fn .cpu()s anyway)
+    base_pos_w_full = robot.data.root_pos_w[:, :3]  # (N, 3)
 
-    # Base pose (world)
-    base_pos_w = robot.data.root_pos_w[:, :2]  # (N, 2)
-    base_quat_w = robot.data.root_quat_w       # (N, 4)
+    # Move planning inputs to CPU
+    base_pos_w = robot.data.root_pos_w[:, :2].to(cpu)     # (N, 2)
+    base_quat_w = robot.data.root_quat_w.to(cpu)          # (N, 4)
 
-    # Goal pose for planning (stable world-frame if possible)
-    goal_xy_world = _get_pose_command_goal_xy_world(env, robot)
+    goal_xy_world = _get_pose_command_goal_xy_world(env, robot).to(cpu)  # (N, 2)
+    obs_xy_all_world = obstacles.data.object_link_pose_w[:, :, :2].to(cpu)  # (N, num_obs, 2)
 
+    # Origins (only used for debug in your current code)
+    env_origins_xy = env.scene.env_origins[:, :2].to(cpu)  # noqa: F841
 
-    # Obstacles positions in world frame
-    obs_xy_all_world = obstacles.data.object_link_pose_w[:, :, :2]  # (N, num_obs, 2)
+    # If you later want true env-frame math, subtract origins here.
+    base_pos_env = base_pos_w - env_origins_xy
+    goal_xy_env = goal_xy_world - env_origins_xy
+    obs_xy_all_env = obs_xy_all_world - env_origins_xy.unsqueeze(1)
 
-    # --- Convert to per-env "environment frame" (subtract env origins) ---
-    env_origins_xy = env.scene.env_origins[:, :2].to(device=device)  # (N, 2)
-
-    base_pos_env = base_pos_w   # (N, 2)
-    goal_xy_env = goal_xy_world   # (N, 2)
-    obs_xy_all_env = obs_xy_all_world # (N, num_obs, 2)
-
-    # Initialize / access cache on env
+    # ---- cache on CPU ----
     if not hasattr(env, "_lookahead_cache"):
         env._lookahead_cache = {
-            # goal in ENV frame corresponding to the stored path
             "last_goal_xy": goal_xy_env.clone(),
-            # per-env list of ENV-frame path points
-            "paths": [None] * num_envs,  # type: ignore[list-item]
-            # per-env total length of ORIGINAL path
-            "path_total_len": torch.zeros(num_envs, device=device),
-            # per-env occupancy grid used for LOS checks
-            "occ_grids": [None] * num_envs,  # List[Optional[List[List[bool]]]]
+            "paths": [None] * num_envs,
+            "path_total_len": torch.zeros(num_envs, device=cpu),
+            "occ_grids": [None] * num_envs,
+            "path_tensors": [None] * num_envs,
+            "seg_lens": [None] * num_envs,
+            "cum_lens": [None] * num_envs,
+            "progress_idx": torch.zeros(num_envs, dtype=torch.long, device=cpu),
+
         }
 
     cache = env._lookahead_cache
@@ -598,7 +598,6 @@ def lookahead_hint(
     need_replan_goal = goal_delta > grid_resolution * 0.5
 
     replan_ids = set(torch.nonzero(need_replan_goal, as_tuple=False).squeeze(-1).tolist())
-    # Also ensure first-time initialization
     for env_idx in range(num_envs):
         if paths[env_idx] is None:
             replan_ids.add(env_idx)
@@ -608,7 +607,6 @@ def lookahead_hint(
         goal = tuple(float(v) for v in goal_xy_env[env_idx].tolist())
         obs_list = [tuple(float(x) for x in xy) for xy in obs_xy_all_env[env_idx].tolist()]
 
-        # Build and cache occupancy grid for LOS checks
         grid_size = int((2.0 * map_half_extent) / grid_resolution)
         if grid_size > 1:
             occ_grid = _build_occupancy_grid(
@@ -635,61 +633,55 @@ def lookahead_hint(
         paths[env_idx] = path
         last_goal_xy[env_idx] = goal_xy_env[env_idx]
 
-        # Cache the ORIGINAL total path length for this goal
         if path is not None and len(path) >= 2:
-            pt = torch.tensor(path, dtype=torch.float32)
+            pt = torch.tensor(path, dtype=torch.float32, device=cpu)
             seg_vecs = pt[1:] - pt[:-1]
             seg_lens = torch.linalg.norm(seg_vecs, dim=1)
             total_len = float(seg_lens.sum().item())
         else:
             total_len = 0.0
+
+        pt = torch.tensor(path, dtype=torch.float32, device=cpu)
+        seg = torch.linalg.norm(pt[1:] - pt[:-1], dim=1)
+        cum = torch.cat([torch.zeros(1), torch.cumsum(seg, dim=0)])
+        cache["path_tensors"][env_idx] = pt
+        cache["seg_lens"][env_idx] = seg
+        cache["cum_lens"][env_idx] = cum
+        cache["progress_idx"][env_idx] = 0
+
         path_total_len[env_idx] = max(total_len, 1e-6)
 
-    # Write back updated tensors into cache
     cache["last_goal_xy"] = last_goal_xy
     cache["paths"] = paths
     cache["path_total_len"] = path_total_len
     cache["occ_grids"] = occ_grids
 
-    # Now compute hints from cached paths
+    # ---- compute hints from cached paths (CPU) ----
     for env_idx in range(num_envs):
         path = paths[env_idx]
         if not path or len(path) < 2:
-            # no valid path → leave zeros, flag stays 0
             continue
 
-        total_len = path_total_len[env_idx]
+        total_len = float(path_total_len[env_idx].item())
         if total_len <= 1e-6:
             continue
 
-        # Path points are stored in ENV frame
-        path_tensor = torch.tensor(path, dtype=torch.float32, device=device)  # (P, 2)
-        robot_xy = base_pos_env[env_idx]  # (2,) in ENV frame
+        path_tensor = cache["path_tensors"][env_idx]  # (P, 2)
+        robot_xy = base_pos_env[env_idx]                                   # (2,)
 
-        # Segment lengths (for progress and lookahead)
-        seg_vecs = path_tensor[1:] - path_tensor[:-1]      # (P-1, 2)
-        seg_lens = torch.linalg.norm(seg_vecs, dim=1)      # (P-1,)
-        curr_total_len = torch.clamp(seg_lens.sum(), min=1e-6)  # avoid div-by-zero
+        seg_lens = cache["seg_lens"][env_idx]
+        _ = torch.clamp(seg_lens.sum(), min=1e-6)  # curr_total_len (unused beyond debug)
 
-        # Find closest path point to the robot
         diff = path_tensor - robot_xy.unsqueeze(0)
         dists_sq = torch.sum(diff * diff, dim=1)
         closest_idx = int(torch.argmin(dists_sq).item())
 
-        # Path length from start to closest point
         if closest_idx == 0:
-            s_travelled = torch.tensor(0.0, device=device)
+            s_travelled = 0.0
         else:
-            s_travelled = seg_lens[:closest_idx].sum()
+            s_travelled = float(seg_lens[:closest_idx].sum().item())
 
-        # distance1 = s_travelled / total_len
-        # distance2 = 1.0 - (curr_total_len / total_len)
-        # distance3 = 1.0 - (curr_total_len - s_travelled) / total_len
-
-        # print(f"----------\CHECKING THE WAYS TO COMPUTE PROGRESS:\ntotal_len: {total_len}\ncurr_total_len: {curr_total_len}\nclosest_id: {closest_idx}\ns_travelled: {s_travelled}\ndistance1: {distance1:.4f}\ndistance2: {distance2:.4f}\ndistance3: {distance3:.4f}\n----------")
-
-        # TODO: Choose the actual best way to compute path progress
-        path_progress = torch.clamp(s_travelled / total_len, 0.0, 1.0)
+        path_progress = max(0.0, min(1.0, s_travelled / total_len))
 
         #TODO: WHEN UPGRADING TO 4D LOOKAHEAD (plus hint):
         # # --- UPGRADE FOR 4D: compute detour amount = (remaining path length - straight-line distance) ---
@@ -709,19 +701,16 @@ def lookahead_hint(
         # detour_norm = max(0.0, min(1.0, detour_norm))
         # detour_norm = torch.tensor(detour_norm, device=device, dtype=torch.float32)
 
-        # --- LOS-bounded lookahead in [min_lookahead_distance, max_lookahead_distance] ---
-        occ_grid = occ_grids[env_idx] if "occ_grids" in cache else None
+        occ_grid = occ_grids[env_idx]
 
         best_idx: Optional[int] = None
         best_eucl: float = 0.0
 
         if occ_grid is not None:
-            # Scan forward along the path from the closest point
             for j in range(closest_idx + 1, path_tensor.shape[0]):
-                cand_xy = path_tensor[j]  # (2,)
-                eucl = torch.linalg.norm(cand_xy - robot_xy).item()
+                cand_xy = path_tensor[j]
+                eucl = float(torch.linalg.norm(cand_xy - robot_xy).item())
 
-                # Enforce [min, max] bounds on Euclidean distance
                 if eucl < min_lookahead_distance or eucl > max_lookahead_distance:
                     continue
 
@@ -733,57 +722,62 @@ def lookahead_hint(
         if best_idx is not None:
             look_idx = best_idx
         else:
-            # Fallback: original behavior, walk along path until min_lookahead_distance
             look_idx = closest_idx
             travelled = 0.0
             for j in range(closest_idx, path_tensor.shape[0] - 1):
-                seg_len = torch.linalg.norm(path_tensor[j + 1] - path_tensor[j]).item()
+                seg_len = float(torch.linalg.norm(path_tensor[j + 1] - path_tensor[j]).item())
                 travelled += seg_len
                 look_idx = j + 1
                 if travelled >= min_lookahead_distance:
                     break
 
-        look_xy = path_tensor[look_idx]  # (2,)
+        look_xy = path_tensor[look_idx]
 
-        # --- Debug visualization (only if enabled, and only for one env) ---
+        # Debug draw (unchanged semantics)
         if ENABLE_LOOKAHEAD_DEBUG_DRAW and int(env_idx) == int(DEBUG_LOOKAHEAD_ENV_ID):
-            try:
-                origin_xy = env_origins_xy[env_idx]           # (2,)
-                path_world_xy = path_tensor     # (P, 2)
-                lookahead_world_xy = look_xy      # (2,)
-                debug_draw_path_and_lookahead(
-                    path_world_xy=path_world_xy,
-                    base_pos_world=base_pos_w_full[env_idx],
-                    lookahead_world_xy=lookahead_world_xy,
-                )
-            except Exception:
-                # Never let debug drawing crash the sim or training
-                pass
+            # try:
+            origin_xy = env_origins_xy[env_idx]  # (2,)
 
-        # World-frame delta
-        delta_world = look_xy - robot_xy  # (2,)
+            # Convert ENV coords back to WORLD for visualization
+            path_world_xy = path_tensor + origin_xy            # (P, 2)
+            lookahead_world_xy = look_xy + origin_xy           # (2,)
 
-        # Rotate into base frame (XY) using yaw only
-        yaw = _yaw_from_quat(base_quat_w[env_idx])
+            debug_draw_path_and_lookahead(
+                path_world_xy=path_world_xy,
+                base_pos_world=base_pos_w_full[env_idx],       # (3,) already world
+                lookahead_world_xy=lookahead_world_xy,
+            )
+            # except Exception:
+            #     pass
+
+        delta_world = look_xy - robot_xy
+
+        yaw = _yaw_from_quat(base_quat_w[env_idx])  # CPU scalar tensor
         cos_y = torch.cos(-yaw)
         sin_y = torch.sin(-yaw)
-        dx_b = cos_y * delta_world[0] - sin_y * delta_world[1]
-        dy_b = sin_y * delta_world[0] + cos_y * delta_world[1]
 
-        out[env_idx, 0] = dx_b
-        out[env_idx, 1] = dy_b
-        out[env_idx, 2] = path_progress  # fraction of ORIGINAL path completed
-        out[env_idx, 3] = 1.0           # hint active
+        dx_b = (cos_y * delta_world[0] - sin_y * delta_world[1]).item()
+        dy_b = (sin_y * delta_world[0] + cos_y * delta_world[1]).item()
+
+        # Write small scalars into GPU output
+        out[env_idx, 0] = float(dx_b)
+        out[env_idx, 1] = float(dy_b)
+        out[env_idx, 2] = float(path_progress)
+        out[env_idx, 3] = 1.0
         #TODO: WHEN UPGRADING TO 4D LOOKAHEAD (plus hint):
         # out[env_idx, 3] = detour_norm        # normalized detour amount
         # out[env_idx, 4] = 1.0                # hint active
-    
-    # --- Randomly disable the hint in ~20% of envs ---
-    hint_prob = 0.8
-    mask = torch.bernoulli(torch.full((num_envs, 1), hint_prob, device=device))
-    out = out * mask
 
-    return out
+    # ---- optional flicker mask (MUST be on GPU) ----
+    out_gpu = out.to(device_out)
+
+    # keep your mask on GPU
+    hint_prob = 0.8
+    mask = torch.bernoulli(torch.full((num_envs, 1), hint_prob, device=device_out))
+    out_gpu = out_gpu * mask
+
+    return out_gpu
+
 
 
 def lookahead_placeholder(env: ManagerBasedRLEnv) -> torch.Tensor:
