@@ -5,6 +5,30 @@ import isaaclab.utils.math as math_utils  # Contains the crucial conversion tool
 import isaaclab.envs.mdp as mdp
 import math
 
+#New imports for A*:
+import heapq
+from typing import List, Optional, Tuple
+
+
+# TODO: ADD DEBUG DRAWING OF PATH + LOOKAHEAD POINT
+# # Optional: debug drawing of global A* path + lookahead
+# try:
+#     from isaacsim.util.debug_draw import _debug_draw
+# except Exception:
+#     # In pure headless / IsaacLab-python builds this may not exist
+#     _debug_draw = None
+
+# _DEBUG_DRAW = None
+
+# # Toggle this to enable/disable visualization globally
+# ENABLE_LOOKAHEAD_DEBUG_DRAW: bool = False
+# DEBUG_LOOKAHEAD_ENV_ID: int = 0  # which env index to visualize (usually 0)
+# # For toggling this on:
+# ENABLE_LOOKAHEAD_DEBUG_DRAW = True
+# DEBUG_LOOKAHEAD_ENV_ID = 0   # whichever env index you care about
+
+
+
 # Placeholder function (fills with 0's)
 def goal_relative_placeholder(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
     """Phase 1-3: Returns zeros [num_envs, 3] (Distance, Sin, Cos)"""
@@ -161,14 +185,578 @@ def lidar_scan_normalized(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) ->
     return normalized_scan
 
 
-def lookahead_hint(env: ManagerBasedRLEnv) -> torch.Tensor:
+
+
+
+
+#### SLAM/PATH PLANNING CHANGES START #####
+
+
+
+# TODO: ADD DEBUG DRAWING OF PATH + LOOKAHEAD POINT
+# def _get_debug_draw():
+#     """Lazily acquire the global debug-draw interface from Isaac Sim."""
+#     global _DEBUG_DRAW
+#     if _debug_draw is None:
+#         return None
+#     if _DEBUG_DRAW is None:
+#         try:
+#             _DEBUG_DRAW = _debug_draw.acquire_debug_draw_interface()
+#         except Exception:
+#             _DEBUG_DRAW = None
+#     return _DEBUG_DRAW
+
+
+# def debug_draw_path_and_lookahead(
+#     path_world_xy: torch.Tensor,
+#     base_pos_world: torch.Tensor,
+#     lookahead_world_xy: torch.Tensor,
+#     path_color=(0.0, 1.0, 0.0, 1.0),
+#     lookahead_color=(1.0, 0.3, 0.0, 1.0),
+#     link_color=(1.0, 1.0, 0.0, 1.0),
+#     path_width: float = 2.5,
+#     link_width: float = 2.0,
+# ):
+#     """
+#     Visualize the global A* path and lookahead using isaacsim.util.debug_draw.
+
+#     Args:
+#         path_world_xy:      (P, 2) tensor of [x, y] path points in world frame.
+#         base_pos_world:     (3,)   tensor of base [x, y, z] in world frame.
+#         lookahead_world_xy: (2,)   tensor of [x, y] for lookahead in world frame.
+#     """
+#     draw = _get_debug_draw()
+#     if draw is None:
+#         return
+
+#     # If no path, just clear any existing drawings
+#     if path_world_xy.numel() == 0:
+#         try:
+#             draw.clear_lines()
+#             draw.clear_points()
+#         except Exception:
+#             pass
+#         return
+
+#     # Use base z for all points so the path lies in a horizontal plane at robot height
+#     z = float(base_pos_world[2].item())
+
+#     # Path points to 3D list
+#     pts_np = path_world_xy.detach().cpu().numpy()
+#     path_pts_3d = [(float(p[0]), float(p[1]), z) for p in pts_np]
+
+#     # Lookahead point (3D)
+#     lx = float(lookahead_world_xy[0].item())
+#     ly = float(lookahead_world_xy[1].item())
+#     lookahead_pt_3d = [(lx, ly, z)]
+
+#     # Robot base (3D)
+#     bx = float(base_pos_world[0].item())
+#     by = float(base_pos_world[1].item())
+#     base_pt_3d = [(bx, by, z)]
+
+#     # Clear previous drawings so we only see the current step
+#     try:
+#         draw.clear_lines()
+#         draw.clear_points()
+#     except Exception:
+#         # If something goes wrong, don't crash the sim
+#         pass
+
+#     # Draw the path as a spline (API from Isaac Sim Debug Drawing extension docs)
+#     draw.draw_lines_spline(path_pts_3d, path_color, float(path_width), False)
+
+#     # Draw lookahead as a point
+#     draw.draw_points(lookahead_pt_3d, [lookahead_color], [10.0])
+
+#     # Draw a line from robot base to lookahead
+#     draw.draw_lines(base_pt_3d, lookahead_pt_3d, [link_color], [float(link_width)])
+
+
+def _yaw_from_quat(q: torch.Tensor) -> torch.Tensor:
+    """Extract yaw from quaternion (w, x, y, z). Returns scalar tensor."""
+    w, x, y, z = q.unbind(-1)
+    # standard yaw-from-quat formula (Z-up, yaw around Z)
+    siny_cosp = 2.0 * (w * z + x * y)
+    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+    return torch.atan2(siny_cosp, cosy_cosp)
+
+
+def _world_to_grid(
+    x: float,
+    y: float,
+    map_half_extent: float,
+    grid_resolution: float,
+    grid_size: int,
+) -> Optional[Tuple[int, int]]:
+    """Convert world (x, y) to integer grid indices (ix, iy). Return None if out of bounds."""
+    ix = int((x + map_half_extent) / grid_resolution)
+    iy = int((y + map_half_extent) / grid_resolution)
+    if ix < 0 or iy < 0 or ix >= grid_size or iy >= grid_size:
+        return None
+    return ix, iy
+
+
+def _grid_to_world(
+    ix: int,
+    iy: int,
+    map_half_extent: float,
+    grid_resolution: float,
+) -> Tuple[float, float]:
+    """Convert grid indices (ix, iy) to world (x, y) at cell center."""
+    x = (ix + 0.5) * grid_resolution - map_half_extent
+    y = (iy + 0.5) * grid_resolution - map_half_extent
+    return x, y
+
+def _build_occupancy_grid(
+    obstacles_xy: List[Tuple[float, float]],
+    map_half_extent: float,
+    grid_resolution: float,
+    obstacle_inflation: float,
+    grid_size: int,
+) -> List[List[bool]]:
+    """Build a binary occupancy grid (True = occupied) with inflated obstacles."""
+    occ = [[False for _ in range(grid_size)] for _ in range(grid_size)]
+    infl_radius_sq = obstacle_inflation * obstacle_inflation
+
+    for ix in range(grid_size):
+        for iy in range(grid_size):
+            cx, cy = _grid_to_world(ix, iy, map_half_extent, grid_resolution)
+            for ox, oy in obstacles_xy:
+                dx = ox - cx
+                dy = oy - cy
+                if dx * dx + dy * dy <= infl_radius_sq:
+                    occ[iy][ix] = True
+                    break
+    return occ
+
+
+def _plan_astar_single_env(
+    start_xy: Tuple[float, float],
+    goal_xy: Tuple[float, float],
+    occ: List[List[bool]],
+    map_half_extent: float,
+    grid_resolution: float,
+    max_astar_steps: int,
+) -> Optional[List[Tuple[float, float]]]:
+    """Compute an 8-connected A* path in 2D grid from start to goal on a given occupancy grid.
+
+    Returns:
+        List of (x, y) world points along the path, or None if no path found / invalid.
+    """
+    if occ is None:
+        return None
+
+    grid_size = len(occ)
+    if grid_size <= 1:
+        return None
+
+    start_idx = _world_to_grid(*start_xy, map_half_extent, grid_resolution, grid_size)
+    goal_idx = _world_to_grid(*goal_xy, map_half_extent, grid_resolution, grid_size)
+    if start_idx is None or goal_idx is None:
+        return None
+
+    sx, sy = start_idx
+    gx, gy = goal_idx
+
+    # If start or goal in obstacle, bail
+    if occ[sy][sx] or occ[gy][gx]:
+        return None
+
+    # A* search
+    def heuristic(ix: int, iy: int) -> float:
+        dx = ix - gx
+        dy = iy - gy
+        return math.sqrt(dx * dx + dy * dy)
+
+    neighbors = [  # 8-connected
+        (-1, 0),
+        (1, 0),
+        (0, -1),
+        (0, 1),
+        (-1, -1),
+        (-1, 1),
+        (1, -1),
+        (1, 1),
+    ]
+
+    open_heap: List[Tuple[float, int, int]] = []
+    heapq.heappush(open_heap, (0.0, sx, sy))
+
+    came_from: dict[Tuple[int, int], Optional[Tuple[int, int]]] = {(sx, sy): None}
+    g_cost: dict[Tuple[int, int], float] = {(sx, sy): 0.0}
+
+    steps = 0
+    while open_heap and steps < max_astar_steps:
+        f, x, y = heapq.heappop(open_heap)
+        steps += 1
+
+        if (x, y) == (gx, gy):
+            break
+
+        for dx, dy in neighbors:
+            nx, ny = x + dx, y + dy
+            if nx < 0 or ny < 0 or nx >= grid_size or ny >= grid_size:
+                continue
+            if occ[ny][nx]:
+                continue
+
+            step_cost = 1.0 if dx == 0 or dy == 0 else math.sqrt(2.0)
+            new_g = g_cost[(x, y)] + step_cost
+            nkey = (nx, ny)
+
+            if nkey not in g_cost or new_g < g_cost[nkey]:
+                g_cost[nkey] = new_g
+                heapq.heappush(open_heap, (new_g + heuristic(nx, ny), nx, ny))
+                came_from[nkey] = (x, y)
+
+    if (gx, gy) not in came_from:
+        return None
+
+    # Reconstruct path (grid -> world)
+    path_grid: List[Tuple[int, int]] = []
+    cur: Optional[Tuple[int, int]] = (gx, gy)
+    while cur is not None:
+        path_grid.append(cur)
+        cur = came_from[cur]
+    path_grid.reverse()
+
+    path_world: List[Tuple[float, float]] = [
+        _grid_to_world(ix, iy, map_half_extent, grid_resolution) for (ix, iy) in path_grid
+    ]
+    return path_world
+
+
+def _has_line_of_sight(
+    occ: List[List[bool]],
+    start_xy: torch.Tensor,
+    end_xy: torch.Tensor,
+    map_half_extent: float,
+    grid_resolution: float,
+) -> bool:
+    """Check if the straight segment start_xy→end_xy is free of occupied cells."""
+    if occ is None:
+        return False
+
+    grid_size = len(occ)
+    sx_sy = _world_to_grid(
+        float(start_xy[0]),
+        float(start_xy[1]),
+        map_half_extent,
+        grid_resolution,
+        grid_size,
+    )
+    ex_ey = _world_to_grid(
+        float(end_xy[0]),
+        float(end_xy[1]),
+        map_half_extent,
+        grid_resolution,
+        grid_size,
+    )
+    if sx_sy is None or ex_ey is None:
+        return False
+
+    x0, y0 = sx_sy
+    x1, y1 = ex_ey
+
+    dx = abs(x1 - x0)
+    dy = abs(y1 - y0)
+    sx = 1 if x0 < x1 else -1
+    sy = 1 if y0 < y1 else -1
+    err = dx - dy
+
+    x, y = x0, y0
+    while True:
+        # Out of bounds or occupied → no LOS
+        if y < 0 or y >= grid_size or x < 0 or x >= grid_size:
+            return False
+        if occ[y][x]:
+            return False
+
+        if x == x1 and y == y1:
+            break
+
+        e2 = 2 * err
+        if e2 > -dy:
+            err -= dy
+            x += sx
+        if e2 < dx:
+            err += dx
+            y += sy
+
+    return True
+
+
+def lookahead_hint(
+    env: ManagerBasedRLEnv,
+    map_half_extent: float = 7.0,
+    grid_resolution: float = 0.25,
+    min_lookahead_distance: float = 1.0,
+    max_lookahead_distance: float = 4.0,
+    obstacle_inflation: float = 0.35,
+    max_astar_steps: int = 8192,
+) -> torch.Tensor:
+    """Return [dx, dy, path_progress, hint_active] for each env.
+
+    - dx, dy are in the robot base frame (XY plane).
+    - path_progress in [0, 1] = arclength along ORIGINAL A* path from start to robot / original total path length.
+    - hint_active is 1.0 if a valid path exists, otherwise 0.0 and the rest are zeros.
+    """
+    device = env.device
+    num_envs = env.num_envs
+
+    out = torch.zeros((num_envs, 4), device=device, dtype=torch.float32)
+    #TODO: WHEN UPGRADING TO 4D LOOKAHEAD (plus hint):
+    # 5 dims: dx, dy, path_progress, detour_norm, hint_active
+    # out = torch.zeros((num_envs, 5), device=device, dtype=torch.float32)
+
+    scene = env.scene
+    if "robot" not in scene or "obstacles" not in scene:
+        return out
+
+    robot = scene["robot"]
+    obstacles = scene["obstacles"]
+
+    # Full base position (x, y, z) for debug drawing
+    base_pos_w_full = robot.data.root_pos_w[:, :3] # (N, 3)
+
+    # Base pose (world)
+    base_pos_w = robot.data.root_pos_w[:, :2]  # (N, 2)
+    base_quat_w = robot.data.root_quat_w       # (N, 4)
+
+    # Goal pose from command buffer (x, y, heading) in world frame
+    pose_cmd = mdp.generated_commands(env, command_name="pose_command")
+    goal_xy_world = pose_cmd[:, :2]                    # (N, 2)
+
+    # Obstacles positions in world frame
+    obs_xy_all_world = obstacles.data.object_link_pose_w[:, :, :2]  # (N, num_obs, 2)
+
+    # --- Convert to per-env "environment frame" (subtract env origins) ---
+    env_origins_xy = env.scene.env_origins[:, :2].to(device=device)  # (N, 2)
+
+    base_pos_env = base_pos_w - env_origins_xy                       # (N, 2)
+    goal_xy_env = goal_xy_world - env_origins_xy                     # (N, 2)
+    obs_xy_all_env = obs_xy_all_world - env_origins_xy.unsqueeze(1)  # (N, num_obs, 2)
+
+    # Initialize / access cache on env
+    if not hasattr(env, "_lookahead_cache"):
+        env._lookahead_cache = {
+            # goal in ENV frame corresponding to the stored path
+            "last_goal_xy": goal_xy_env.clone(),
+            # per-env list of ENV-frame path points
+            "paths": [None] * num_envs,  # type: ignore[list-item]
+            # per-env total length of ORIGINAL path
+            "path_total_len": torch.zeros(num_envs, device=device),
+            # per-env occupancy grid used for LOS checks
+            "occ_grids": [None] * num_envs,  # List[Optional[List[List[bool]]]]
+        }
+
+    cache = env._lookahead_cache
+    occ_grids: List[Optional[List[List[bool]]]] = cache["occ_grids"]
+    last_goal_xy: torch.Tensor = cache["last_goal_xy"]
+    paths: List[Optional[List[Tuple[float, float]]]] = cache["paths"]
+    path_total_len: torch.Tensor = cache["path_total_len"]
+
+    # Replan only when the goal moves significantly, or when we don't have a path yet
+    goal_delta = torch.linalg.norm(goal_xy_env - last_goal_xy, dim=1)
+    need_replan_goal = goal_delta > grid_resolution * 0.5
+
+    replan_ids = set(torch.nonzero(need_replan_goal, as_tuple=False).squeeze(-1).tolist())
+    # Also ensure first-time initialization
+    for env_idx in range(num_envs):
+        if paths[env_idx] is None:
+            replan_ids.add(env_idx)
+
+    for env_idx in replan_ids:
+        start = tuple(float(v) for v in base_pos_env[env_idx].tolist())
+        goal = tuple(float(v) for v in goal_xy_env[env_idx].tolist())
+        obs_list = [tuple(float(x) for x in xy) for xy in obs_xy_all_env[env_idx].tolist()]
+
+        # Build and cache occupancy grid for LOS checks
+        grid_size = int((2.0 * map_half_extent) / grid_resolution)
+        if grid_size > 1:
+            occ_grid = _build_occupancy_grid(
+                obstacles_xy=obs_list,
+                map_half_extent=map_half_extent,
+                grid_resolution=grid_resolution,
+                obstacle_inflation=obstacle_inflation,
+                grid_size=grid_size,
+            )
+        else:
+            occ_grid = None
+
+        occ_grids[env_idx] = occ_grid
+
+        path = _plan_astar_single_env(
+            start_xy=start,
+            goal_xy=goal,
+            occ=occ_grid,
+            map_half_extent=map_half_extent,
+            grid_resolution=grid_resolution,
+            max_astar_steps=max_astar_steps,
+        )
+
+        paths[env_idx] = path
+        last_goal_xy[env_idx] = goal_xy_env[env_idx]
+
+        # Cache the ORIGINAL total path length for this goal
+        if path is not None and len(path) >= 2:
+            pt = torch.tensor(path, dtype=torch.float32)
+            seg_vecs = pt[1:] - pt[:-1]
+            seg_lens = torch.linalg.norm(seg_vecs, dim=1)
+            total_len = float(seg_lens.sum().item())
+        else:
+            total_len = 0.0
+        path_total_len[env_idx] = max(total_len, 1e-6)
+
+    # Write back updated tensors into cache
+    cache["last_goal_xy"] = last_goal_xy
+    cache["paths"] = paths
+    cache["path_total_len"] = path_total_len
+    cache["occ_grids"] = occ_grids
+
+    # Now compute hints from cached paths
+    for env_idx in range(num_envs):
+        path = paths[env_idx]
+        if not path or len(path) < 2:
+            # no valid path → leave zeros, flag stays 0
+            continue
+
+        total_len = path_total_len[env_idx]
+        if total_len <= 1e-6:
+            continue
+
+        # Path points are stored in ENV frame
+        path_tensor = torch.tensor(path, dtype=torch.float32, device=device)  # (P, 2)
+        robot_xy = base_pos_env[env_idx]  # (2,) in ENV frame
+
+        # Segment lengths (for progress and lookahead)
+        seg_vecs = path_tensor[1:] - path_tensor[:-1]      # (P-1, 2)
+        seg_lens = torch.linalg.norm(seg_vecs, dim=1)      # (P-1,)
+        curr_total_len = torch.clamp(seg_lens.sum(), min=1e-6)  # avoid div-by-zero
+
+        # Find closest path point to the robot
+        diff = path_tensor - robot_xy.unsqueeze(0)
+        dists_sq = torch.sum(diff * diff, dim=1)
+        closest_idx = int(torch.argmin(dists_sq).item())
+
+        # Path length from start to closest point
+        if closest_idx == 0:
+            s_travelled = torch.tensor(0.0, device=device)
+        else:
+            s_travelled = seg_lens[:closest_idx].sum()
+
+        distance1 = s_travelled / total_len
+        distance2 = 1.0 - (curr_total_len / total_len)
+        distance3 = 1.0 - (curr_total_len - s_travelled) / total_len
+
+        print(f"----------\CHECKING THE WAYS TO COMPUTE PROGRESS:\ntotal_len: {total_len}\ncurr_total_len: {curr_total_len}\ns_travelled: {s_travelled}\ndistance1: {distance1:.4f}\ndistance2: {distance2:.4f}\ndistance3: {distance3:.4f}\n----------")
+
+        # TODO: Choose the actual best way to compute path progress
+        path_progress = torch.clamp(s_travelled / total_len, 0.0, 1.0)
+
+        #TODO: WHEN UPGRADING TO 4D LOOKAHEAD (plus hint):
+        # # --- UPGRADE FOR 4D: compute detour amount = (remaining path length - straight-line distance) ---
+        # # Remaining path length from robot to goal along the A* path
+        # # TODO: After choosing final path progress method, ensure this matches
+        # remaining_len = max(float(total_len - s_travelled.item()), 0.0)
+
+        # # Straight-line distance from robot to goal
+        # goal_xy_env = goal_xy[env_idx]  # (2,)
+        # straight_dist = torch.linalg.norm(goal_xy_env - robot_xy)
+
+        # # Difference (how much longer the optimal path is than a straight line)
+        # detour = remaining_len - float(straight_dist.item())
+
+        # # Normalize by map_half_extent and clamp to [0, 1]
+        # detour_norm = detour / map_half_extent
+        # detour_norm = max(0.0, min(1.0, detour_norm))
+        # detour_norm = torch.tensor(detour_norm, device=device, dtype=torch.float32)
+
+        # --- LOS-bounded lookahead in [min_lookahead_distance, max_lookahead_distance] ---
+        occ_grid = occ_grids[env_idx] if "occ_grids" in cache else None
+
+        best_idx: Optional[int] = None
+        best_eucl: float = 0.0
+
+        if occ_grid is not None:
+            # Scan forward along the path from the closest point
+            for j in range(closest_idx + 1, path_tensor.shape[0]):
+                cand_xy = path_tensor[j]  # (2,)
+                eucl = torch.linalg.norm(cand_xy - robot_xy).item()
+
+                # Enforce [min, max] bounds on Euclidean distance
+                if eucl < min_lookahead_distance or eucl > max_lookahead_distance:
+                    continue
+
+                if _has_line_of_sight(occ_grid, robot_xy, cand_xy, map_half_extent, grid_resolution):
+                    if eucl > best_eucl:
+                        best_eucl = eucl
+                        best_idx = j
+
+        if best_idx is not None:
+            look_idx = best_idx
+        else:
+            # Fallback: original behavior, walk along path until min_lookahead_distance
+            look_idx = closest_idx
+            travelled = 0.0
+            for j in range(closest_idx, path_tensor.shape[0] - 1):
+                seg_len = torch.linalg.norm(path_tensor[j + 1] - path_tensor[j]).item()
+                travelled += seg_len
+                look_idx = j + 1
+                if travelled >= min_lookahead_distance:
+                    break
+
+        look_xy = path_tensor[look_idx]  # (2,)
+
+        # TODO: ADD DEBUG DRAWING OF PATH + LOOKAHEAD POINT
+        # # --- Debug visualization (only if enabled, and only for one env) ---
+        # if ENABLE_LOOKAHEAD_DEBUG_DRAW and int(env_idx) == int(DEBUG_LOOKAHEAD_ENV_ID):
+        #     try:
+        #         origin_xy = env_origins_xy[env_idx]           # (2,)
+        #         path_world_xy = path_tensor + origin_xy       # (P, 2)
+        #         lookahead_world_xy = look_xy + origin_xy      # (2,)
+        #         debug_draw_path_and_lookahead(
+        #             path_world_xy=path_world_xy,
+        #             base_pos_world=base_pos_w_full[env_idx],
+        #             lookahead_world_xy=lookahead_world_xy,
+        #         )
+        #     except Exception:
+        #         # Never let debug drawing crash the sim or training
+        #         pass
+
+        # World-frame delta
+        delta_world = look_xy - robot_xy  # (2,)
+
+        # Rotate into base frame (XY) using yaw only
+        yaw = _yaw_from_quat(base_quat_w[env_idx])
+        cos_y = torch.cos(-yaw)
+        sin_y = torch.sin(-yaw)
+        dx_b = cos_y * delta_world[0] - sin_y * delta_world[1]
+        dy_b = sin_y * delta_world[0] + cos_y * delta_world[1]
+
+        out[env_idx, 0] = dx_b
+        out[env_idx, 1] = dy_b
+        out[env_idx, 2] = path_progress  # fraction of ORIGINAL path completed
+        out[env_idx, 3] = 1.0           # hint active
+        #TODO: WHEN UPGRADING TO 4D LOOKAHEAD (plus hint):
+        # out[env_idx, 3] = detour_norm        # normalized detour amount
+        # out[env_idx, 4] = 1.0                # hint active
+
+    return out
+
+
+def lookahead_placeholder(env: ManagerBasedRLEnv) -> torch.Tensor:
     """
     Phase 1: Returns random noise with a RARE availability flag.
     Strategy: 90% Off / 10% On.
     Why: Prevents the network from learning to "hate" this input.
     """
-    # 1. Random Vector (The Garbage)
+    # 1. 3 Random Vectors (The Garbage)
     noise_vec = torch.randn((env.num_envs, 3), device=env.device)
+    #TODO: WHEN UPGRADING TO 4D LOOKAHEAD (plus hint):
+    # 1. 4 Random Vectors (The Garbage)
+    # noise_vec = torch.randn((env.num_envs, 4), device=env.device)
 
     # 2. Bernoulli Mask (The Coin Flip)
     # 0.1 means 10% chance of being 1.0, 90% chance of being 0.0
@@ -176,6 +764,11 @@ def lookahead_hint(env: ManagerBasedRLEnv) -> torch.Tensor:
 
     # 3. Combine
     return torch.cat([noise_vec, flag], dim=-1)
+
+
+
+#### SLAM/PATH PLANNING CHANGES END #####
+
 
 
 def safe_height_scan(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
