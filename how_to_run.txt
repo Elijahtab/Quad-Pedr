@@ -1,8 +1,4 @@
 
-How to toggle LiDAR ray visualization:
-In rough_env_cfg.py, look for the RayCasterCfg block (around line 200) and change this line: 
-``` debug_vis=False  # Set to True to show rays ```
-
 
 ---- Milestone 1: Standing ----
 
@@ -10,43 +6,19 @@ Train
 ```
 ./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/train.py --task=Isaac-Nav-Go2-v0 --headless
 ```
+With video:
+```
+./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/train.py --task=Isaac-Nav-Go2-v0 --headless --video --video_length 200 --video_interval 100
+```
 
 Watch
 ```
-./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/play.py --task=Isaac-Nav-Go2-v0 --video --video_length 200
+./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/play.py --task=Isaac-Nav-Go2-v0 --num_envs 1
 ```
-(Rename and save the video to the Google Drive)
+RESUME:
+
+ ./isaaclab.sh -p scripts/reinforcement_learning/rsl_rl/train.py --task=Isaac-Nav-Flat-Go2-v0 --resume --load_run=2025-12-02_23-18-00 --checkpoint=model_3200.pt --headless
 
 
----- Milestone 2: Drunk walking ----
-
-In class NavCommandsCfg, change this part as specified for Milestone 2:
-"mdp.UniformVelocityCommandCfg.Ranges"
-
-Train, watch, record, and save the video.
-
-
----- Milestone 2.5: Drunk walking on terrain ----
-
-In __post_init__(), comment out the TERRAIN SETUP section as specified
-
-Train, watch, record, and save the video.
-
-
----- Milestone 3: Full walking control ----
-
-In class NavCommandsCfg, change this part as specified for Milestone 3:
-"mdp.UniformVelocityCommandCfg.Ranges"
-
-Train, watch, record, and save the video.
-
-
----- Milestone 4: Goal chasing ----
-
-In class NavCommandsCfg, uncomment the specified block at the bottom
-In class NavCommandsCfg, comment out the previous block (base_velocity = ...)
-Under PolicyCfg, swap the goal_relative goal to the commented one
-Under NavRewardsCfg, uncomment the progress to goal and arrival bonus rewards
-At the bottom of post_init(), uncomment this line: "self.rewards.feet_air_time.params["command_name"] = "goal_pos""
-
-Train, watch, record, and save the video.
+FLAGS:
+--task=Isaac-Nav-Go2-Flat-v0
