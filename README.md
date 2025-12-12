@@ -4,7 +4,7 @@ This repository implements a hierarchical reinforcement learning framework for t
 
 ## Prerequisites
 This project requires a fully functioning installation of **NVIDIA Isaac Lab.** We will omit a step-by-step guide to installation as NVIDIA themselves provides a simple installation guide.
-- **System Requirements:** Firstly, please verify your hardware system meets the [Isaac Sim Requirments](https://docs.isaacsim.omniverse.nvidia.com/5.1.0/installation/requirements.html)
+- **System Requirements:** Firstly, please verify your hardware system meets the [Isaac Sim Requirements](https://docs.isaacsim.omniverse.nvidia.com/5.1.0/installation/requirements.html)
 - **Installation:** Follow the official [Issac Lab Instruction Guide w/ Pip](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/pip_installation.html)
 
 **Verification:** To confirm the installation is successful please run the examples. 
@@ -37,16 +37,20 @@ cd go2_navigation
 *Note: The `-e` flag allows you to edit the code and see changes immediately without reinstalling.*
 
 ## Usage 
-All commands should be **ran from the root of your Isaac Lab Installation.**
+All commands should be **run from the root of your Isaac Lab Installation.**
 
-### Play Pre-Trained Policy
+### DEMO: Play Pre-Trained Policy
+To verify the installation and see the robot in action, run the command below. This serves as the **project demo**, loading our pre-trained model and generating a video of the agent navigating.
 ```bash
 ./isaaclab.sh -p source/standalone/workflows/rsl_rl/play.py \
   --task=Isaac-Nav-Flat-Go2-Play-v0 \
   --num_envs 1 \
+  --video --video_length 1000 \
   --checkpoint source/extensions/go2_navigation/trained_models/flat_policy.pt
 ```
 *Note: The `--checkpoint` flag points directly to the .pt file included in this repo. To continue to use this to get videos, please replace the `.pt` path.*
+
+**Where is the video?** The resulting video will be saved automatically to: `logs/rsl_rl/Isaac-Nav-Flat-Go2-Play-v0/videos/`
 
 ### Training from Scratch
 To train the policies yourself it'll be like this:
